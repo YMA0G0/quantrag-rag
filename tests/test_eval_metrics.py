@@ -105,10 +105,10 @@ class TestRandomRankerBaselines:
     def test_random_mrr(self):
         # Hand‑computed: sum over i of P(first relevant at i) / i = 0.72222...
         expected = (
-            0.5 * 1.0 +
-            ( (2/4)*(2/3) ) * (1/2) +
-            ( (2/4)*(1/3)*(2/2) ) * (1/3) +
-            0.0  # position 4 impossible
+            0.5 * 1.0
+            + ((2 / 4) * (2 / 3)) * (1 / 2)
+            + ((2 / 4) * (1 / 3) * (2 / 2)) * (1 / 3)
+            + 0.0  # position 4 impossible
         )
         assert abs(random_reciprocal_rank(self.N, self.R) - expected) < 1e-9
 
