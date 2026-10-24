@@ -1,0 +1,33 @@
+# --- Secrets / local configuration ---
+.env
+.env.*
+!.env.example
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Python caches / build artefacts ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- Ingestion artefacts ---
+data/raw/
+data/chunks.jsonl
+data/index
+data/index.json
+data/ingest_report.json
+data/ingest_report.csv
+data/ingest_report.dryrun.json
+data/ingest_report.dryrun.csv
+
+# Manual source documents (large, licence-unclear)
+data/manual/*
+!data/manual/README.md

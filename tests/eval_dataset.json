@@ -1,0 +1,553 @@
+{
+  "metadata": {
+    "corpus": "data/chunks.jsonl",
+    "corpus_hash": "057085f406f1fb27a0a739a9b016084ef67bf0f63bd99db25a49ad0ce9ba7d07",
+    "corpus_size": 164,
+    "num_queries": 28,
+    "num_answerable": 18,
+    "num_expected_none": 10,
+    "rules_file": "tests/eval_queries.json",
+    "matching": "A chunk is relevant iff chunk.url == source_url AND (every regex in must_contain matches AND at least one regex in must_contain_any matches, if given). Matching is performed on the chunk BODY with the leading title prefix removed, after NFKC normalisation, diacritic stripping and case-folding. Each entry in must_contain / must_contain_any is a Python regular expression.",
+    "derived_by": "scripts/build_ground_truth.py",
+    "description": "Ground truth derived from content rules: chunk.url == source_url AND must_contain (all) AND must_contain_any (>=1), matched on the chunk body with the prepended title removed, NFKC + diacritics stripped + casefolded."
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "Brownian motion with drift",
+      "type": "definition",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/",
+      "must_contain": [
+        "Brownian Motion with Drift"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3460fe14fd-0000",
+        "3460fe14fd-0001",
+        "3460fe14fd-0002",
+        "3460fe14fd-0003",
+        "3460fe14fd-0045"
+      ],
+      "num_relevant": 5,
+      "leak_outside_source": {
+        "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote17/": 1
+      }
+    },
+    {
+      "id": "q02",
+      "query": "geometric Brownian motion",
+      "type": "definition",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/",
+      "must_contain": [
+        "Geometric Brownian Motion"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3460fe14fd-0050",
+        "3460fe14fd-0051",
+        "3460fe14fd-0052",
+        "3460fe14fd-0053",
+        "3460fe14fd-0054"
+      ],
+      "num_relevant": 5,
+      "leak_outside_source": {
+        "https://bauer.uh.edu/spirrong/interest_rate_models.pdf": 1,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/": 1
+      }
+    },
+    {
+      "id": "q03",
+      "query": "Itô's lemma",
+      "type": "formula",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": [
+        "Ito's Lemma"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "5170453106-0000",
+        "5170453106-0002",
+        "5170453106-0003",
+        "5170453106-0004",
+        "5170453106-0005",
+        "5170453106-0006",
+        "5170453106-0009",
+        "5170453106-0011",
+        "5170453106-0012",
+        "5170453106-0013",
+        "5170453106-0014",
+        "5170453106-0015",
+        "5170453106-0016",
+        "5170453106-0018",
+        "5170453106-0021",
+        "5170453106-0022"
+      ],
+      "num_relevant": 16,
+      "leak_outside_source": {
+        "https://arxiv.org/pdf/2502.07766": 1,
+        "https://bauer.uh.edu/spirrong/interest_rate_models.pdf": 1,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/": 2,
+        "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/": 5
+      }
+    },
+    {
+      "id": "q04",
+      "query": "Heston stochastic volatility model",
+      "type": "definition",
+      "category": "Heston and SABR Models",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": [
+        "Heston"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "5170453106-0011",
+        "5170453106-0013",
+        "5170453106-0014",
+        "5170453106-0015",
+        "5170453106-0023",
+        "5170453106-0024",
+        "5170453106-0025",
+        "5170453106-0026"
+      ],
+      "num_relevant": 8,
+      "leak_outside_source": {
+        "https://arxiv.org/pdf/2502.07766": 14
+      }
+    },
+    {
+      "id": "q05",
+      "query": "SABR model calibration for equities",
+      "type": "conceptual",
+      "category": "Heston and SABR Models",
+      "source_url": "https://arxiv.org/pdf/2502.07766",
+      "must_contain": [
+        "calibration"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "7817a9939d-0000",
+        "7817a9939d-0001",
+        "7817a9939d-0005",
+        "7817a9939d-0007",
+        "7817a9939d-0008",
+        "7817a9939d-0016",
+        "7817a9939d-0021",
+        "7817a9939d-0026"
+      ],
+      "num_relevant": 8,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q06",
+      "query": "Vasicek short rate model",
+      "type": "definition",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": [
+        "Vasicek"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3d4a999736-0001",
+        "3d4a999736-0010"
+      ],
+      "num_relevant": 2,
+      "leak_outside_source": {
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/": 1,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/": 1
+      }
+    },
+    {
+      "id": "q07",
+      "query": "Hull-White interest rate model",
+      "type": "definition",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": [
+        "Hull-White"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3d4a999736-0005",
+        "3d4a999736-0010"
+      ],
+      "num_relevant": 2,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q08",
+      "query": "stochastic differential equation definition",
+      "type": "definition",
+      "category": "Stochastic Differential Equations (SDEs)",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote21/",
+      "must_contain": [],
+      "must_contain_any": [
+        "stochastic differential equation",
+        "SDE"
+      ],
+      "expected": "chunks",
+      "ground_truth": [
+        "1c1ddd7b56-0000",
+        "1c1ddd7b56-0001",
+        "1c1ddd7b56-0002",
+        "1c1ddd7b56-0003"
+      ],
+      "num_relevant": 4,
+      "leak_outside_source": {
+        "https://arxiv.org/pdf/2502.07766": 4,
+        "https://bauer.uh.edu/spirrong/interest_rate_models.pdf": 2,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/": 11,
+        "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/": 3
+      }
+    },
+    {
+      "id": "q09",
+      "query": "Monte Carlo simulation",
+      "type": "conceptual",
+      "category": "Stochastic Differential Equations (SDEs)",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote21/",
+      "must_contain": [
+        "Monte Carlo"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "1c1ddd7b56-0002",
+        "1c1ddd7b56-0003"
+      ],
+      "num_relevant": 2,
+      "leak_outside_source": {
+        "https://arxiv.org/pdf/2502.07766": 2,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/": 1,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/": 1
+      }
+    },
+    {
+      "id": "q10",
+      "query": "Markov chain",
+      "type": "definition",
+      "category": "Stochastic Processes",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote5/",
+      "must_contain": [
+        "Markov chain"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "30ad0a25d9-0002",
+        "30ad0a25d9-0003"
+      ],
+      "num_relevant": 2,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q11",
+      "query": "risk-neutral pricing and the SPD",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/",
+      "must_contain": [
+        "risk-neutral"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "09211fe100-0000",
+        "09211fe100-0004",
+        "09211fe100-0005"
+      ],
+      "num_relevant": 3,
+      "leak_outside_source": {
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/": 15
+      }
+    },
+    {
+      "id": "q12",
+      "query": "Black-Scholes model",
+      "type": "formula",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": [
+        "Black-Scholes"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "5170453106-0000",
+        "5170453106-0002",
+        "5170453106-0004",
+        "5170453106-0005",
+        "5170453106-0006",
+        "5170453106-0007",
+        "5170453106-0009",
+        "5170453106-0011",
+        "5170453106-0015",
+        "5170453106-0018",
+        "5170453106-0021"
+      ],
+      "num_relevant": 11,
+      "leak_outside_source": {
+        "https://bauer.uh.edu/spirrong/interest_rate_models.pdf": 2,
+        "https://csustan.csustan.edu/~tom/Lecture-Notes/HighFinance/": 1,
+        "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/": 2,
+        "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote21/": 1
+      }
+    },
+    {
+      "id": "q13",
+      "query": "variance swap",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": [
+        "Variance Swap"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "5170453106-0025",
+        "5170453106-0026",
+        "5170453106-0027"
+      ],
+      "num_relevant": 3,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q14",
+      "query": "reflection principle for Brownian motion",
+      "type": "conceptual",
+      "category": "Stochastic Processes",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote17/",
+      "must_contain": [
+        "reflection principle"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "94944dd7cb-0003"
+      ],
+      "num_relevant": 1,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q15",
+      "query": "volatility smile in equity options",
+      "type": "conceptual",
+      "category": "Heston and SABR Models",
+      "source_url": "https://arxiv.org/pdf/2502.07766",
+      "must_contain": [
+        "volatility smile"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "7817a9939d-0002",
+        "7817a9939d-0003",
+        "7817a9939d-0007"
+      ],
+      "num_relevant": 3,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q16",
+      "query": "swaption pricing formula",
+      "type": "formula",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": [
+        "swaption"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3d4a999736-0018",
+        "3d4a999736-0019"
+      ],
+      "num_relevant": 2,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q17",
+      "query": "LIBOR market model forward rates",
+      "type": "conceptual",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": [
+        "LIBOR"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "3d4a999736-0000",
+        "3d4a999736-0011",
+        "3d4a999736-0012",
+        "3d4a999736-0013",
+        "3d4a999736-0014",
+        "3d4a999736-0016",
+        "3d4a999736-0017"
+      ],
+      "num_relevant": 7,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "q18",
+      "query": "Radon-Nikodym derivative and change of measure",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/",
+      "must_contain": [
+        "Radon-Nikodym"
+      ],
+      "must_contain_any": [],
+      "expected": "chunks",
+      "ground_truth": [
+        "09211fe100-0000"
+      ],
+      "num_relevant": 1,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "u01",
+      "query": "CAPM beta",
+      "type": "unanswerable",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "note": "Only name-dropped inside a problem statement in 09211fe100-0001; no explanatory CAPM/beta content exists in the corpus.",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "u02",
+      "query": "discount factor formula",
+      "type": "unanswerable",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "note": "Only mentioned as a question inside 09211fe100-0001; the corpus does not state a discount-factor formula.",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n01",
+      "query": "how long to boil pasta for al dente",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n02",
+      "query": "who won the football world cup final",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n03",
+      "query": "role of chlorophyll in photosynthesis",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n04",
+      "query": "causes of the French Revolution",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n05",
+      "query": "sourdough starter hydration ratio",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n06",
+      "query": "python list comprehension syntax",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n07",
+      "query": "guitar power chord finger positions",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    },
+    {
+      "id": "n08",
+      "query": "weather forecast for tomorrow",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "ground_truth": [],
+      "num_relevant": 0,
+      "leak_outside_source": {}
+    }
+  ]
+}

@@ -1,0 +1,292 @@
+{
+  "metadata": {
+    "description": "Retrieval evaluation rules. Ground-truth chunk ids are DERIVED from these rules by scripts/build_ground_truth.py; they are never copied from retriever output.",
+    "corpus": "data/chunks.jsonl",
+    "matching": "A chunk is relevant iff chunk.url == source_url AND (every regex in must_contain matches AND at least one regex in must_contain_any matches, if given). Matching is performed on the chunk BODY with the leading title prefix removed, after NFKC normalisation, diacritic stripping and case-folding. Each entry in must_contain / must_contain_any is a Python regular expression.",
+    "expected_values": "chunks = answerable, relevance rule above; none = out-of-domain negative or unanswerable query (excluded from hit/recall/MRR, used for score-distribution analysis)"
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "Brownian motion with drift",
+      "type": "definition",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/",
+      "must_contain": ["Brownian Motion with Drift"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q02",
+      "query": "geometric Brownian motion",
+      "type": "definition",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/18-642-topics-in-mathematics-with-applications-in-finance-fall-2024/resources/mit18_642_f24_lec19_1_pdf/",
+      "must_contain": ["Geometric Brownian Motion"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q03",
+      "query": "Itô's lemma",
+      "type": "formula",
+      "category": "Stochastic Calculus and Itô's Lemma",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": ["Ito's Lemma"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q04",
+      "query": "Heston stochastic volatility model",
+      "type": "definition",
+      "category": "Heston and SABR Models",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": ["Heston"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q05",
+      "query": "SABR model calibration for equities",
+      "type": "conceptual",
+      "category": "Heston and SABR Models",
+      "source_url": "https://arxiv.org/pdf/2502.07766",
+      "must_contain": ["calibration"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q06",
+      "query": "Vasicek short rate model",
+      "type": "definition",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": ["Vasicek"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q07",
+      "query": "Hull-White interest rate model",
+      "type": "definition",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": ["Hull-White"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q08",
+      "query": "stochastic differential equation definition",
+      "type": "definition",
+      "category": "Stochastic Differential Equations (SDEs)",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote21/",
+      "must_contain": [],
+      "must_contain_any": ["stochastic differential equation", "SDE"],
+      "expected": "chunks"
+    },
+    {
+      "id": "q09",
+      "query": "Monte Carlo simulation",
+      "type": "conceptual",
+      "category": "Stochastic Differential Equations (SDEs)",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote21/",
+      "must_contain": ["Monte Carlo"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q10",
+      "query": "Markov chain",
+      "type": "definition",
+      "category": "Stochastic Processes",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote5/",
+      "must_contain": ["Markov chain"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q11",
+      "query": "risk-neutral pricing and the SPD",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/",
+      "must_contain": ["risk-neutral"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q12",
+      "query": "Black-Scholes model",
+      "type": "formula",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": ["Black-Scholes"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q13",
+      "query": "variance swap",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_lec02/",
+      "must_contain": ["Variance Swap"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q14",
+      "query": "reflection principle for Brownian motion",
+      "type": "conceptual",
+      "category": "Stochastic Processes",
+      "source_url": "https://ocw.mit.edu/courses/18-s096-topics-in-mathematics-with-applications-in-finance-fall-2013/resources/mit18_s096f13_lecnote17/",
+      "must_contain": ["reflection principle"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q15",
+      "query": "volatility smile in equity options",
+      "type": "conceptual",
+      "category": "Heston and SABR Models",
+      "source_url": "https://arxiv.org/pdf/2502.07766",
+      "must_contain": ["volatility smile"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q16",
+      "query": "swaption pricing formula",
+      "type": "formula",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": ["swaption"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q17",
+      "query": "LIBOR market model forward rates",
+      "type": "conceptual",
+      "category": "Fixed Income and Interest Rate Models",
+      "source_url": "https://bauer.uh.edu/spirrong/interest_rate_models.pdf",
+      "must_contain": ["LIBOR"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "q18",
+      "query": "Radon-Nikodym derivative and change of measure",
+      "type": "conceptual",
+      "category": "Black–Scholes and Option Pricing",
+      "source_url": "https://ocw.mit.edu/courses/15-450-analytics-of-finance-fall-2010/resources/mit15_450f10_review01/",
+      "must_contain": ["Radon-Nikodym"],
+      "must_contain_any": [],
+      "expected": "chunks"
+    },
+    {
+      "id": "u01",
+      "query": "CAPM beta",
+      "type": "unanswerable",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "note": "Only name-dropped inside a problem statement in 09211fe100-0001; no explanatory CAPM/beta content exists in the corpus."
+    },
+    {
+      "id": "u02",
+      "query": "discount factor formula",
+      "type": "unanswerable",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none",
+      "note": "Only mentioned as a question inside 09211fe100-0001; the corpus does not state a discount-factor formula."
+    },
+    {
+      "id": "n01",
+      "query": "how long to boil pasta for al dente",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n02",
+      "query": "who won the football world cup final",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n03",
+      "query": "role of chlorophyll in photosynthesis",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n04",
+      "query": "causes of the French Revolution",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n05",
+      "query": "sourdough starter hydration ratio",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n06",
+      "query": "python list comprehension syntax",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n07",
+      "query": "guitar power chord finger positions",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    },
+    {
+      "id": "n08",
+      "query": "weather forecast for tomorrow",
+      "type": "out_of_domain",
+      "category": "",
+      "source_url": null,
+      "must_contain": [],
+      "must_contain_any": [],
+      "expected": "none"
+    }
+  ]
+}
