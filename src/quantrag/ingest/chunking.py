@@ -174,6 +174,8 @@ _BOILERPLATE_PATTERNS = [
     re.compile(r"this document may not be reproduced", re.IGNORECASE),
     re.compile(r"no part of this publication", re.IGNORECASE),
     re.compile(r"published by", re.IGNORECASE),
+    re.compile(r"terms of use", re.IGNORECASE),
+    re.compile(r"ocw\.mit\.edu/terms", re.IGNORECASE),
 ]
 
 # Notation/appendix: "Appendix B:" headings + parameter definitions with
@@ -196,7 +198,7 @@ def _looks_like_appendix(text: str) -> bool:
 def _looks_like_toc(text: str) -> bool:
     """Detect table-of-contents chunks: dotted leaders, page numbers, section lists."""
     lines = [line for line in text.splitlines() if line.strip()]
-    if len(lines) < 3:
+    if len(lines) < 2:
         return False
     toc_lines = sum(1 for pat in _TOC_PATTERNS for line in lines if pat.search(line))
     short_page_lines = sum(
@@ -204,7 +206,16 @@ def _looks_like_toc(text: str) -> bool:
         for line in lines
         if len(line.strip()) < 100 and re.search(r"\d+\s*$", line.strip()) and len(line.strip()) > 3
     )
-    return toc_lines >= 2 or short_page_lines >= len(lines) * 0.7
+    # Strong signal: short dotted-leader / numbered-TOC line at the start of the chunk
+    # (a TOC page followed by body text, as in Bielefeld NumSDE script.pdf)
+    first_lines = lines[:3]
+    if any(
+        len(line.strip()) < 120 and any(pat.search(line) for pat in _TOC_PATTERNS)
+        for line in first_lines
+    ):
+        return True
+    # Moderate signal: 2+ dotted lines or mostly page-number lines
+    return toc_lines >= 2 or short_page_lines >= len(lines) * 0.5
 
 
 def _looks_like_references(text: str) -> bool:
@@ -219,7 +230,17 @@ def _looks_like_references(text: str) -> bool:
             if re.search(r"\b\d{4}\b", line)
             and re.search(r"(doi|http|journal|vol|no|pp|et al)", line, re.IGNORECASE)
         )
-        if citation_lines >= len(lines) * 0.5:
+        # Lowered threshold: a single line with year + citation marker (doi/http)
+        # is strong evidence of a reference-list chunk.
+        if citation_lines >= 1:
+            return True
+        # Also: 2+ lines with DOI/URL (common in reference lists)
+        doi_url_lines = sum(
+            1
+            for line in lines
+            if re.search(r"(doi:|https?://)", line, re.IGNORECASE)
+        )
+        if doi_url_lines >= 2 and doi_url_lines >= len(lines) * 0.4:
             return True
     return False
 

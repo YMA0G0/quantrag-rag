@@ -154,12 +154,8 @@ Final paragraph here."""
 # Part E: toc / references / boilerplate chunk filters
 # ---------------------------------------------------------------------------
 def test_chunk_filter_classifies_sabr_appendix_b():
-    """SABR Appendix-B notation chunk from docs/phase1_audit.md must not be 'prose'.
-
-    The old SABR Appendix-B chunk lists parameter notations with Greek letters
-    and should be classified as formula_dump (or another non-prose kind),
-    never as plain prose.
-    """
+    """SABR Appendix-B notation chunk (REAL snippet from docs/phase1_audit.md)
+    must not be 'prose'."""
     from quantrag.ingest.chunking import _chunk_filter_kind
 
     sabr_appendix_b = """Appendix B: Closed-form expressions for mrSABR
@@ -176,15 +172,18 @@ E:"""
     assert kind != "prose", f"SABR Appendix-B should not be prose, got {kind}"
 
 
-def test_chunk_filter_toc_detection():
-    """Table-of-contents chunks with dotted leaders and page numbers are 'toc'."""
+def test_chunk_filter_toc_detection_bielefeld():
+    """REAL Bielefeld NumSDE TOC chunk: dotted leader at start of chunk -> 'toc'."""
     from quantrag.ingest.chunking import _looks_like_toc
 
-    toc_text = """Contents
-1. Introduction ...... 3
-2. Black-Scholes Model ...... 7
-3. Option Pricing ...... 12
-4. Hedging Strategies ...... 18"""
+    # From chunk 6146332aa7-0000 (Bielefeld NumSDE script.pdf) in data/chunks.jsonl
+    toc_text = """. . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 141
+Chapter 1
+Introduction
+Inrecent years dynamical systems(of deterministic and stochasticnature),
+describing many modelsinmathematics,
+to deterministic algorithms seems to be insufficient for such systems, since,
+for example,"""
     assert _looks_like_toc(toc_text) is True
 
     normal_text = """This is a normal paragraph about option pricing theory.
@@ -193,16 +192,15 @@ No page numbers or dotted leaders here."""
     assert _looks_like_toc(normal_text) is False
 
 
-def test_chunk_filter_references_detection():
-    """Reference/bibliography chunks with years and citations are 'references'."""
+def test_chunk_filter_references_detection_finrl_x():
+    """REAL FinRL-X reference chunk: years + DOIs/URLs -> 'references'."""
     from quantrag.ingest.chunking import _looks_like_references
 
-    ref_text = """References
-Black, F., and Scholes, M. (1973). The Pricing of Options and Corporate
-Liabilities. Journal of Political Economy, 81(3), pp. 637-654.
-Merton, R. C. (1973). Theory of Rational Option Pricing. Bell Journal of
-Economics, 4(1), pp. 141-160.
-doi: 10.2307/1831029"""
+    # From chunk 989ea86b83-0013 (arXiv 1908.10063) in data/chunks.jsonl
+    ref_text = """2014. News
+500 examples. This is an important result, since deep learning tech-
+impact on stock price return via sentiment analysis. Knowledge-Based Systems
+69 (oct 2014), 14–23. https://doi.org/10.1016/j.knosys.2014.05.012"""
     assert _looks_like_references(ref_text) is True
 
     normal_text = """This paper discusses option pricing using the Black-Scholes model.
@@ -211,13 +209,17 @@ No references section here."""
     assert _looks_like_references(normal_text) is False
 
 
-def test_chunk_filter_boilerplate_detection():
-    """Boilerplate copyright/disclaimer chunks are 'boilerplate'."""
+def test_chunk_filter_boilerplate_detection_mit_tou():
+    """REAL MIT OCW Terms-of-Use footer -> 'boilerplate'."""
     from quantrag.ingest.chunking import _looks_like_boilerplate
 
-    boilerplate = """All rights reserved. No part of this publication may be reproduced
-without prior written permission from the publisher.
-Copyright © 2024 University Press."""
+    # From chunk 3460fe14fd-0031 (MIT OCW 18.642) in data/chunks.jsonl
+    boilerplate = """• T = 4(years)
+• µ =0.30, σ =0.40
+• m = increments on time interval (0, T ]. Endpoints at
+t = i × (T /m), i = 1, 2,..., m
+For information about citing these materials or our Terms of Use, visit:
+https://ocw.mit.edu/terms."""
     assert _looks_like_boilerplate(boilerplate) is True
 
     normal_text = """This is a substantive paragraph about quantitative finance.
