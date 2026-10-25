@@ -124,13 +124,15 @@ def _hard_split(text: str, max_tokens: int) -> list[str]:
 class ChunkDraft:
     text: str
     section: str = ""
-    kind: str = "text"
+    kind: str = "prose"
 
 
 def _formula_dump_ratio(text: str) -> float:
     """Return the fraction of characters in *text* that are math symbols or digits.
 
     If > 60 % the chunk is considered a formula dump and excluded.
+    Includes Mathematical Alphanumeric Symbols (U+1D400–U+1D7FF) such as
+    𝛼, 𝜃, 𝜆, 𝜈, 𝜌 used in formula notation.
     """
     if not text:
         return 0.0
@@ -141,8 +143,103 @@ def _formula_dump_ratio(text: str) -> float:
         or ch in "0123456789"
         or ch in "αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
         or ch in "σµ∂∫∂½√∞"
+        or "\u1d400" <= ch <= "\u1d7ff"  # Mathematical Alphanumeric Symbols
     )
     return math_chars / len(text)
+
+
+# ---------------------------------------------------------------------------
+# Additional chunk filters: toc, references, boilerplate
+# ---------------------------------------------------------------------------
+_TOC_PATTERNS = [
+    re.compile(r"\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*\.\s*\d+\s*$"),  # dotted TOC
+    re.compile(
+        r"^\s*\d+(\.\d+)*\s+[A-Z][^\n]{0,80}\s*\.\s*\.\s*\.\s*\.\s*\.\s*\d+\s*$",
+        re.MULTILINE,
+    ),  # numbered TOC
+    re.compile(r"^\s*(contents|table of contents)\s*$", re.IGNORECASE | re.MULTILINE),
+]
+
+_REFERENCES_PATTERNS = [
+    re.compile(r"\b(references|bibliography)\s*$", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\b\d{4}\b.*\b(doi|http|journal|vol\.|no\.|pp\.)", re.IGNORECASE),
+    re.compile(r"\b(et al\.)", re.IGNORECASE),
+]
+
+_BOILERPLATE_PATTERNS = [
+    re.compile(r"all rights reserved", re.IGNORECASE),
+    re.compile(r"copyright\s*©?\s*\d{4}", re.IGNORECASE),
+    re.compile(r"this document may not be reproduced", re.IGNORECASE),
+    re.compile(r"no part of this publication", re.IGNORECASE),
+    re.compile(r"published by", re.IGNORECASE),
+]
+
+# Notation/appendix: "Appendix B:" headings + parameter definitions with
+# math alphanumeric symbols (e.g. "alp: parameter 𝛼 ...")
+_APPENDIX_HEADING = re.compile(r"^appendix\s+[A-Z0-9]", re.IGNORECASE | re.MULTILINE)
+
+
+def _has_math_alpha(text: str) -> bool:
+    """True if *text* contains Mathematical Alphanumeric Symbols (U+1D400–U+1D7FF)."""
+    return any(0x1D400 <= ord(ch) <= 0x1D7FF for ch in text)
+
+
+def _looks_like_appendix(text: str) -> bool:
+    """Detect appendix/notation chunks: Appendix heading + parameter defs."""
+    if not _APPENDIX_HEADING.search(text):
+        return False
+    return bool(re.search(r":\s*parameter\s+", text, re.IGNORECASE)) and _has_math_alpha(text)
+
+
+def _looks_like_toc(text: str) -> bool:
+    """Detect table-of-contents chunks: dotted leaders, page numbers, section lists."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) < 3:
+        return False
+    toc_lines = sum(1 for pat in _TOC_PATTERNS for line in lines if pat.search(line))
+    short_page_lines = sum(
+        1
+        for line in lines
+        if len(line.strip()) < 100 and re.search(r"\d+\s*$", line.strip()) and len(line.strip()) > 3
+    )
+    return toc_lines >= 2 or short_page_lines >= len(lines) * 0.7
+
+
+def _looks_like_references(text: str) -> bool:
+    """Detect reference/bibliography chunks."""
+    if re.search(r"\b(references|bibliography)\s*$", text, re.IGNORECASE | re.MULTILINE):
+        return True
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) >= 3:
+        citation_lines = sum(
+            1
+            for line in lines
+            if re.search(r"\b\d{4}\b", line)
+            and re.search(r"(doi|http|journal|vol|no|pp|et al)", line, re.IGNORECASE)
+        )
+        if citation_lines >= len(lines) * 0.5:
+            return True
+    return False
+
+
+def _looks_like_boilerplate(text: str) -> bool:
+    """Detect boilerplate: copyright, disclaimers, publisher notices."""
+    return any(pat.search(text) for pat in _BOILERPLATE_PATTERNS) and len(text.strip()) < 2000
+
+
+def _chunk_filter_kind(text: str) -> str:
+    """Classify a chunk's kind: prose, formula_dump, toc, references, boilerplate."""
+    if _formula_dump_ratio(text) > 0.6:
+        return "formula_dump"
+    if _looks_like_toc(text):
+        return "toc"
+    if _looks_like_references(text):
+        return "references"
+    if _looks_like_boilerplate(text):
+        return "boilerplate"
+    if _looks_like_appendix(text):
+        return "formula_dump"
+    return "prose"
 
 
 def _sections(text: str) -> list[tuple[str, str]]:
@@ -228,19 +325,27 @@ def chunk_text(
             capped.append(draft)
         else:
             for piece in _hard_split(draft.text, budget):
-                capped.append(ChunkDraft(piece, draft.section))
+                # _hard_split can return pieces slightly above budget because
+                # joining sentences with spaces can create new BPE merges that
+                # increase the token count vs the sum of individual counts.
+                # Belt-and-suspenders: split any remaining oversized pieces.
+                if count_tokens(piece) <= budget:
+                    capped.append(ChunkDraft(piece, draft.section))
+                else:
+                    for subpiece in _token_window(piece, budget):
+                        capped.append(ChunkDraft(subpiece, draft.section))
     drafts = capped
 
     if len(drafts) > 1:
         drafts = [d for d in drafts if len(d.text.strip()) >= min_chars]
 
-    # Exclude formula-dump chunks: >60% math symbols/digits
+    # Classify each chunk: formula_dump, toc, references, boilerplate, or prose
     kept: list[ChunkDraft] = []
-    formula_dumped = 0
+    kind_counts: dict[str, int] = {}
     for draft in drafts:
-        if _formula_dump_ratio(draft.text) > 0.6:
-            draft.kind = "formula_dump"
-            formula_dumped += 1
+        draft.kind = _chunk_filter_kind(draft.text)
+        kind_counts[draft.kind] = kind_counts.get(draft.kind, 0) + 1
+        if draft.kind != "prose":
             continue
         kept.append(draft)
     drafts = kept

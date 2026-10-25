@@ -97,20 +97,43 @@ def detect_format(content: bytes, content_type: str = "") -> str:
 
 def find_pdf_link(content: bytes, base_url: str) -> str | None:
     """Return the first plausible PDF link on a wrapper page, if any."""
+    links = find_all_pdf_links(content, base_url)
+    return links[0] if links else None
+
+
+def find_all_pdf_links(content: bytes, base_url: str, max_links: int = 15) -> list[str]:
+    """Return all plausible PDF links on a wrapper page, capped at ``max_links``.
+
+    Preserves document order. Deduplicates by normalised URL.
+    """
     try:
         text = content.decode("utf-8", errors="replace")
     except Exception:
-        return None
+        return []
+
+    seen: set[str] = set()
+    links: list[str] = []
+
+    def _add(href: str) -> None:
+        candidate = urljoin(base_url, href)
+        norm = candidate.lower().split("?")[0]
+        if not norm.endswith(".pdf"):
+            return
+        if norm in seen:
+            return
+        seen.add(norm)
+        links.append(candidate)
+
     for match in _DOWNLOAD_HREF.finditer(text):
-        candidate = urljoin(base_url, match.group(1))
-        if candidate.lower().split("?")[0].endswith(".pdf"):
-            return candidate
+        _add(match.group(1))
+        if len(links) >= max_links:
+            return links
     for match in _PDF_HREF.finditer(text):
-        href = match.group(1)
-        # Skip obvious related-file links that are not the main download.
-        if href.lower().split("?")[0].endswith(".pdf"):
-            return urljoin(base_url, href)
-    return None
+        _add(match.group(1))
+        if len(links) >= max_links:
+            return links
+
+    return links
 
 
 def cache_path(cache_dir: Path, url: str, ext: str = ".bin") -> Path:

@@ -17,7 +17,7 @@ from .chunking import (
     make_chunk_id,
 )
 from .extract import extract_html, extract_pdf
-from .fetch import FetchResult, HostRateLimiter, detect_format, fetch
+from .fetch import FetchResult, HostRateLimiter, detect_format, fetch, find_all_pdf_links
 from .sources import Source, load_manual_sources, select_sources
 
 THIN_PAGE_CHARS = 1500
@@ -45,13 +45,14 @@ def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: s
     return _Doc(text, 1, "text", used_url, followed_from)
 
 
-def _get_doc(
+def _get_docs(
     source: Source, cache_dir: Path, limiter: HostRateLimiter
-) -> tuple[_Doc | None, str, dict[str, object] | None]:
-    """Return (doc, error_reason, image_profile).
+) -> tuple[list[_Doc] | None, str, dict[str, object] | None]:
+    """Return (docs, error_reason, image_profile).
 
-    ``image_profile`` is only populated for manual PDFs; it carries the
-    per-page text/image stats used to flag image-locked decks (``needs_ocr``).
+    For HTML pages with PDF links, follows up to 15 PDF hops (one hop each),
+    returning one _Doc per followed PDF plus the HTML doc itself if no PDF
+    links were found.
     """
     if source.manual_file:
         try:
@@ -60,26 +61,92 @@ def _get_doc(
             return None, f"manual_read_error: {type(exc).__name__}", None
         try:
             doc = _doc_from_bytes(source, data, source.url, "")
-        except Exception as exc:  # noqa: BLE001
-            return None, f"extract_error: {type(exc).__name__}", None
+        except Exception:  # noqa: BLE001
+            return None, "extract_error", None
         profile: dict[str, object] | None = None
         if Path(source.manual_file).suffix.lower() == ".pdf":
             from .extract import pdf_image_profile
 
             profile = pdf_image_profile(data)
-        return doc, "", profile
+        return [doc], "", profile
 
-    result: FetchResult = fetch(source.url, cache_dir=cache_dir, rate_limiter=limiter)
+    # Fetch without following PDF hops first; we handle hops ourselves.
+    result: FetchResult = fetch(
+        source.url,
+        cache_dir=cache_dir,
+        rate_limiter=limiter,
+        follow_pdf_hop=False,
+    )
     if not result.ok:
         return None, result.error, None
+
+    fmt = result.detected_format
+    docs: list[_Doc] = []
+
+    if fmt == "pdf":
+        try:
+            doc = _doc_from_bytes(
+                source,
+                result.content,
+                result.used_url or result.url,
+                result.followed_from,
+            )
+        except Exception:  # noqa: BLE001
+            return None, "extract_error", None
+        docs.append(doc)
+        return docs, "", None
+
+    if fmt == "html":
+        # Find all PDF links on the HTML page (one-hop follow, cap 15)
+        pdf_links = find_all_pdf_links(result.content, result.used_url or result.url, max_links=15)
+
+        if pdf_links:
+            # Follow each PDF link (up to 15)
+            for pdf_url in pdf_links:
+                nested = fetch(
+                    pdf_url,
+                    cache_dir=cache_dir,
+                    rate_limiter=limiter,
+                    follow_pdf_hop=False,
+                )
+                if nested.ok and nested.detected_format == "pdf":
+                    try:
+                        doc = _doc_from_bytes(
+                            source,
+                            nested.content,
+                            nested.used_url or nested.url,
+                            source.url,  # followed_from = original HTML source
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+                    docs.append(doc)
+            return docs, "", None
+        else:
+            # No PDF links: process the HTML page itself
+            try:
+                doc = _doc_from_bytes(
+                    source,
+                    result.content,
+                    result.used_url or result.url,
+                    result.followed_from,
+                )
+            except Exception:  # noqa: BLE001
+                return None, "extract_error", None
+            docs.append(doc)
+            return docs, "", None
+
+    # plain text or binary
     try:
         doc = _doc_from_bytes(
-            source, result.content, result.used_url or result.url, result.followed_from
+            source,
+            result.content,
+            result.used_url or result.url,
+            result.followed_from,
         )
-    except Exception as exc:  # noqa: BLE001
-        return None, f"extract_error: {type(exc).__name__}", None
-    doc.pages = doc.pages
-    return doc, "", None
+    except Exception:  # noqa: BLE001
+        return None, "extract_error", None
+    docs.append(doc)
+    return docs, "", None
 
 
 def run_pipeline(
@@ -147,9 +214,9 @@ def run_pipeline(
 
     for source in selected:
         rrow = report_by_url.get((source.url, source.origin))
-        doc, err, image_profile = _get_doc(source, cache_dir, limiter)
+        docs, err, image_profile = _get_docs(source, cache_dir, limiter)
 
-        if doc is None:
+        if docs is None:
             # Distinguish fetch failures from extraction failures.
             if err.endswith(("robots_disallowed",)) or err.startswith(
                 ("http_", "connection_error", "too_large", "manual_read_error")
@@ -165,92 +232,103 @@ def run_pipeline(
                     rrow["reason"] = err
             continue
 
-        if rrow is not None:
-            rrow["used_url"] = doc.used_url
-            rrow["followed_from"] = doc.followed_from
-            rrow["detected_format"] = doc.fmt
+        # Aggregate metrics across all docs from this source
+        total_chars = 0
+        total_pages = 0
+        total_chunk_count = 0
+        kind_counts: dict[str, int] = {}
+        source_ingested = False
 
-        # Image-locked slide deck: formulas/charts live in images that no
-        # extractor (without OCR) can recover. Mark ``needs_ocr`` and exclude
-        # from the corpus rather than shipping a partial chunk set.
-        if image_profile and image_profile.get("image_locked"):
-            skipped += 1
+        for doc_idx, doc in enumerate(docs):
             if rrow is not None:
-                rrow["status"] = "skipped"
-                rrow["reason"] = "needs_ocr"
-                rrow["pages"] = str(image_profile.get("pages", ""))
-                rrow["characters"] = str(image_profile.get("total_chars", ""))
-            continue
+                rrow["used_url"] = doc.used_url
+                rrow["followed_from"] = doc.followed_from
+                rrow["detected_format"] = doc.fmt
 
-        if len(doc.text.strip()) < 500:
-            skipped += 1
-            if rrow is not None:
-                rrow["status"] = "skipped"
-                rrow["reason"] = "empty_extraction"
-                rrow["characters"] = str(len(doc.text))
-                rrow["pages"] = str(doc.pages)
-            continue
-
-        # Non-PDF pages that are mostly navigation are not worth indexing.
-        if doc.fmt != "pdf" and len(doc.text.strip()) < THIN_PAGE_CHARS:
-            skipped += 1
-            if rrow is not None:
-                rrow["status"] = "skipped"
-                rrow["reason"] = "thin_page"
-                rrow["characters"] = str(len(doc.text))
-                rrow["pages"] = str(doc.pages)
-            continue
-
-        # Strip document title from extracted body if present at start.
-        body = doc.text
-        if body.startswith(source.title):
-            body = body[len(source.title) :].lstrip("\n ")
-
-        drafts = chunk_text(
-            body,
-            title=source.title,
-            url=source.url,
-            target_tokens=target_tokens,
-            max_tokens=max_tokens,
-            overlap_ratio=overlap_ratio,
-            min_chars=min_chars,
-        )
-
-        chunk_count = 0
-        formula_dump_count = 0
-        # chunk_drafts already initialized at the outer scope
-        for idx, draft in enumerate(drafts):
-            if draft.kind == "formula_dump":
-                formula_dump_count += 1
+            # Image-locked slide deck check
+            if image_profile and image_profile.get("image_locked"):
+                skipped += 1
                 if rrow is not None:
                     rrow["status"] = "skipped"
-                    rrow["reason"] = "formula_dump"
-                chunk_drafts.append(draft)
-                continue
-            norm = " ".join(draft.text.split()).lower()
-            chash = hashlib.sha1(norm.encode()).hexdigest()
-            if chash in seen_chunk_hashes:
-                continue
-            seen_chunk_hashes.add(chash)
-            cid = make_chunk_id(source.url, idx)
-            # Store body-only text in JSONL; header added at index time
-            record = {
-                "id": cid,
-                "text": draft.text,
-                "title": source.title,
-                "url": source.url,
-                "category": source.category,
-                "section": draft.section,
-                "kind": draft.kind,
-            }
-            all_chunks.append(record)
-            chunk_token_counts.append(count_tokens(draft.text))
-            chunk_count += 1
-            chunk_drafts.append(draft)
+                    rrow["reason"] = "needs_ocr"
+                    rrow["pages"] = str(image_profile.get("pages", ""))
+                    rrow["characters"] = str(image_profile.get("total_chars", ""))
+                break  # Skip entire source if any doc is image-locked
 
-        ingested += 1
-        if rrow is not None:
+            total_chars += len(doc.text.strip())
+            total_pages += doc.pages
+
+            if len(doc.text.strip()) < 500:
+                skipped += 1
+                if rrow is not None:
+                    rrow["status"] = "skipped"
+                    rrow["reason"] = "empty_extraction"
+                    rrow["characters"] = str(len(doc.text))
+                    rrow["pages"] = str(doc.pages)
+                continue
+
+            # Non-PDF pages that are mostly navigation are not worth indexing.
+            if doc.fmt != "pdf" and len(doc.text.strip()) < THIN_PAGE_CHARS:
+                skipped += 1
+                if rrow is not None:
+                    rrow["status"] = "skipped"
+                    rrow["reason"] = "thin_page"
+                    rrow["characters"] = str(len(doc.text))
+                    rrow["pages"] = str(doc.pages)
+                continue
+
+            # Strip document title from extracted body if present at start.
+            body = doc.text
+            if body.startswith(source.title):
+                body = body[len(source.title) :].lstrip("\n ")
+
+            drafts = chunk_text(
+                body,
+                title=source.title,
+                url=source.url,
+                target_tokens=target_tokens,
+                max_tokens=max_tokens,
+                overlap_ratio=overlap_ratio,
+                min_chars=min_chars,
+            )
+
+            for idx, draft in enumerate(drafts):
+                kind_counts[draft.kind] = kind_counts.get(draft.kind, 0) + 1
+                if draft.kind != "prose":
+                    chunk_drafts.append(draft)
+                    continue
+                norm = " ".join(draft.text.split()).lower()
+                chash = hashlib.sha1(norm.encode()).hexdigest()
+                if chash in seen_chunk_hashes:
+                    continue
+                seen_chunk_hashes.add(chash)
+                cid = make_chunk_id(source.url, doc_idx * 10000 + idx)
+                # Store body-only text in JSONL; header added at index time
+                record = {
+                    "id": cid,
+                    "text": draft.text,
+                    "title": source.title,
+                    "url": source.url,
+                    "category": source.category,
+                    "section": draft.section,
+                    "kind": draft.kind,
+                }
+                all_chunks.append(record)
+                chunk_token_counts.append(count_tokens(draft.text))
+                total_chunk_count += 1
+                chunk_drafts.append(draft)
+
+            source_ingested = True
+
+        if rrow is not None and source_ingested:
             rrow["status"] = "ingested"
+            rrow["chunks"] = str(total_chunk_count)
+            rrow["characters"] = str(total_chars)
+            rrow["pages"] = str(total_pages)
+            for kind_name in ("formula_dump", "toc", "references", "boilerplate"):
+                rrow[f"{kind_name}_chunks"] = str(kind_counts.get(kind_name, 0))
+        if source_ingested:
+            ingested += 1
     out_chunks.parent.mkdir(parents=True, exist_ok=True)
     with out_chunks.open("w", encoding="utf-8") as handle:
         for record in all_chunks:
@@ -269,6 +347,9 @@ def run_pipeline(
         "sources_skipped": skipped,
         "sources_failed": failed,
         "formula_dump_skipped": sum(1 for d in chunk_drafts if d.kind == "formula_dump"),
+        "toc_skipped": sum(1 for d in chunk_drafts if d.kind == "toc"),
+        "references_skipped": sum(1 for d in chunk_drafts if d.kind == "references"),
+        "boilerplate_skipped": sum(1 for d in chunk_drafts if d.kind == "boilerplate"),
         "total_chunks": len(all_chunks),
         "avg_tokens_per_chunk": round(avg_tokens, 2),
         "median_tokens_per_chunk": round(median_tokens, 2),
@@ -300,6 +381,9 @@ def _write_reports(report, totals_obj, json_path, csv_path):
         "characters",
         "chunks",
         "formula_dump_chunks",
+        "toc_chunks",
+        "references_chunks",
+        "boilerplate_chunks",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
