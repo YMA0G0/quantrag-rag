@@ -309,11 +309,11 @@ def chunk_text(
         buf_tokens = 0
         for block in blocks:
             bt = count_tokens(block)
-            if bt > max_tokens:
+            if bt > target_tokens:
                 if buf:
                     drafts.append(ChunkDraft("\n\n".join(buf), heading))
                     buf, buf_tokens = [], 0
-                for piece in _hard_split(block, max_tokens):
+                for piece in _hard_split(block, target_tokens):
                     drafts.append(ChunkDraft(piece, heading))
                 continue
             if buf and buf_tokens + bt > target_tokens:
