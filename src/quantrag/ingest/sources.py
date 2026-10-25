@@ -213,13 +213,10 @@ def _decide(
     marketing = _marketing_reason(row)
     if marketing:
         return False, marketing
-    if profile == "core":
-        try:
-            tier = int(row["priority_tier"])
-        except (ValueError, TypeError):
-            tier = 1
-        if tier > CORE_MAX_TIER and row["category"] not in CORE_CATEGORIES:
-            return False, "outside_core_profile"
+    if profile == "core" and row["category"] not in CORE_CATEGORIES:
+        # Strict category allow-list: tier only ORDERS sources, it never
+        # admits a source whose category is off-list.
+        return False, "outside_core_profile"
     return True, "included"
 
 
@@ -358,14 +355,15 @@ def sha1_url(url: str) -> str:
 
 
 def load_manual_sources(
-    csv_path: str | Path, manual_dir: str | Path
+    csv_path: str | Path, manual_dir: str | Path, profile: str = "core"
 ) -> tuple[list[Source], list[dict[str, str]]]:
     """Load manually downloaded files listed in ``manual_sources.csv``.
 
     Columns: ``title,url,category,file,priority_tier``.  ``file`` is resolved
     relative to ``manual_dir``.  Manual sources bypass the network (and thus
     robots.txt) but go through the same extract/chunk path and are cited by
-    their original ``url``.
+    their original ``url``.  When ``profile == "core"``, the strict category
+    allow-list applies: tier never admits an off-list category.
     """
     path = Path(csv_path)
     if not path.exists():
@@ -382,6 +380,24 @@ def load_manual_sources(
             tier = int(_row_get(raw, "priority_tier") or "1")
         except ValueError:
             tier = 1
+        # Strict category allow-list in core profile: tier never admits
+        # an off-list category, not even for manual sources.
+        if profile == "core" and category not in CORE_CATEGORIES:
+            report.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "origin": path.name,
+                    "status": "skipped",
+                    "reason": "outside_core_profile",
+                    "http_status": "",
+                    "pages": "",
+                    "characters": "",
+                    "chunks": "",
+                    "used_url": "",
+                }
+            )
+            continue
         file_path = Path(manual_dir) / filename
         if not filename or not file_path.is_file():
             report.append(

@@ -67,7 +67,10 @@ def _get_docs(
         if Path(source.manual_file).suffix.lower() == ".pdf":
             from .extract import pdf_image_profile
 
-            profile = pdf_image_profile(data)
+            try:
+                profile = pdf_image_profile(data)
+            except Exception:  # noqa: BLE001 - corrupt PDF shouldn't crash the pipeline
+                profile = None
         return [doc], "", profile
 
     # Fetch without following PDF hops first; we handle hops ourselves.
@@ -180,7 +183,9 @@ def run_pipeline(
         profile=profile,
     )
     if manual_csv and manual_dir:
-        manual_selected, manual_report = load_manual_sources(manual_csv, manual_dir)
+        manual_selected, manual_report = load_manual_sources(
+            manual_csv, manual_dir, profile=profile
+        )
         selected.extend(manual_selected)
         report.extend(manual_report)
 
