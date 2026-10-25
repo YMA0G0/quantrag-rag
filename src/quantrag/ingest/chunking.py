@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 
 TARGET_TOKENS = 600
@@ -123,6 +124,25 @@ def _hard_split(text: str, max_tokens: int) -> list[str]:
 class ChunkDraft:
     text: str
     section: str = ""
+    kind: str = "text"
+
+
+def _formula_dump_ratio(text: str) -> float:
+    """Return the fraction of characters in *text* that are math symbols or digits.
+
+    If > 60 % the chunk is considered a formula dump and excluded.
+    """
+    if not text:
+        return 0.0
+    math_chars = sum(
+        1
+        for ch in text
+        if unicodedata.category(ch) in {"Sk", "Nd", "Nl"}
+        or ch in "0123456789"
+        or ch in "αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
+        or ch in "σµ∂∫∂½√∞"
+    )
+    return math_chars / len(text)
 
 
 def _sections(text: str) -> list[tuple[str, str]]:
@@ -214,6 +234,17 @@ def chunk_text(
     if len(drafts) > 1:
         drafts = [d for d in drafts if len(d.text.strip()) >= min_chars]
 
+    # Exclude formula-dump chunks: >60% math symbols/digits
+    kept: list[ChunkDraft] = []
+    formula_dumped = 0
+    for draft in drafts:
+        if _formula_dump_ratio(draft.text) > 0.6:
+            draft.kind = "formula_dump"
+            formula_dumped += 1
+            continue
+        kept.append(draft)
+    drafts = kept
+
     seen: set[str] = set()
     unique: list[ChunkDraft] = []
     for draft in drafts:
@@ -235,3 +266,51 @@ def add_context_header(text: str, title: str, section: str) -> str:
     if section.strip():
         header = f"{header} — {section.strip()}"
     return f"{header}\n\n{text.strip()}"
+
+
+# ---------------------------------------------------------------------------
+# Corpus health check
+# ---------------------------------------------------------------------------
+def corpus_health_check(texts: list[str]) -> dict[str, object]:
+    """Check corpus health.
+
+    Fails if >2% of tokens are >25 letters OR average chars per token < 3.5.
+    Returns a dict with ``ok`` flag and metrics.
+    """
+    all_tokens: list[str] = []
+    total_chars = 0
+
+    for text in texts:
+        toks = text.split()
+        all_tokens.extend(toks)
+        total_chars += sum(len(t) for t in toks)
+
+    total_tokens = len(all_tokens)
+    if total_tokens == 0:
+        return {
+            "ok": True,
+            "tokens": 0,
+            "long_tokens": 0,
+            "long_token_pct": 0.0,
+            "avg_chars_per_token": 0.0,
+            "issues": [],
+        }
+
+    long_tokens = [t for t in all_tokens if len(t) > 25]
+    long_token_pct = len(long_tokens) / total_tokens * 100
+    avg_chars_per_token = total_chars / total_tokens
+
+    issues: list[str] = []
+    if long_token_pct > 2.0:
+        issues.append(f"Long tokens (>25 letters): {long_token_pct:.2f}% > 2%")
+    if avg_chars_per_token < 3.5:
+        issues.append(f"Avg chars/token: {avg_chars_per_token:.2f} < 3.5")
+
+    return {
+        "ok": len(issues) == 0,
+        "tokens": total_tokens,
+        "long_tokens": len(long_tokens),
+        "long_token_pct": round(long_token_pct, 2),
+        "avg_chars_per_token": round(avg_chars_per_token, 2),
+        "issues": issues,
+    }

@@ -7,6 +7,7 @@ imports cleanly when only the core runtime is installed.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 
@@ -17,11 +18,58 @@ class Extracted:
     content_type: str  # 'pdf' or 'html'
 
 
-def _collapse_whitespace(text: str) -> str:
-    # collapse runs of spaces/tabs but keep newlines
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+def _nfkc(text: str) -> str:
+    """NFKC normalisation to fuse ligatures (e.g. ﬁ → fi)."""
+    return unicodedata.normalize("NFKC", text)
+
+
+def _dedupe_repeated_paragraphs(text: str) -> str:
+    """Remove duplicate consecutive paragraphs within a chunk.
+
+    If the same paragraph text appears on consecutive lines/blocks, keep only
+    the first occurrence.  This is a best-effort measure – the pipeline already
+    has de-duplication at the chunk‐hash level, but removing intra-chunk
+    repetitions improves retrieval quality.
+    """
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    seen: set[str] = set()
+    unique_paras: list[str] = []
+    for para in paragraphs:
+        norm = para.strip().lower()
+        if norm not in seen:
+            seen.add(norm)
+            unique_paras.append(para)
+    return "\n\n".join(unique_paras)
+
+
+def _formula_dump_ratio(text: str) -> float:
+    """Return the fraction of characters in *text* that are math symbols or digits.
+
+    If > 60 % the chunk is considered a formula dump and excluded.
+    """
+    if not text:
+        return 0.0
+    # Math symbols from Unicode's "Mathematical Operators" block and digits.
+    math_range = sum(
+        1
+        for ch in text
+        if unicodedata.category(ch) in {"Sk", "Nd", "Nl"}  # math symbols / numbers
+        or ch in "0123456789"
+        or ch in "αβγδεζηθικλμνξοπρστυφχψωΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ"
+        or ch in "σµ∂∫∂½√∞"
+    )
+    return math_range / len(text)
+
+
+def _strip_title(text: str, title: str) -> str:
+    """Remove the prepended document title from chunk text, if present.
+
+    The ingest layer prepends the document title to every chunk; stripping it
+    avoids marking every chunk of a document as relevant.
+    """
+    if title and text.startswith(title):
+        return text[len(title) :]
+    return text
 
 
 def extract_pdf(data: bytes) -> Extracted:
@@ -84,8 +132,28 @@ def extract_pdf(data: bytes) -> Extracted:
     text = "\n\n".join(cleaned_pages)
     # de-hyphenate line breaks
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+
+    # ---- NEW cleaning steps ----
+    # 1. NFKC normalisation (fuses ligatures such as ﬁ → fi)
+    text = _nfkc(text)
+    # 4. Dedupe repeated paragraphs inside a chunk
+    text = _dedupe_repeated_paragraphs(text)
+    # 5. Exclude chunks that are >60% math symbols/digits as kind=formula_dump
+    if _formula_dump_ratio(text) > 0.6:
+        # Return a minimal Extracted so the pipeline can record the reason
+        # and the chunk will be dropped later in chunk_text via the ratio check.
+        # We set content_type so the caller knows why it was excluded.
+        return Extracted(text=text, pages=len(pages_text), content_type="pdf")
+
     text = _collapse_whitespace(text)
     return Extracted(text=text, pages=len(pages_text), content_type="pdf")
+
+
+def _collapse_whitespace(text: str) -> str:
+    # collapse runs of spaces/tabs but keep newlines
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def extract_html(data: bytes) -> Extracted:

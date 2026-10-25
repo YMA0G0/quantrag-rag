@@ -8,6 +8,11 @@
 venv/
 env/
 
+# --- Build / download artefacts ---
+*.zip
+new*.zip
+quantrag_*.zip
+
 # --- Python caches / build artefacts ---
 __pycache__/
 *.py[cod]

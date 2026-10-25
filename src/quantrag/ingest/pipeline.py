@@ -125,6 +125,7 @@ def run_pipeline(
     all_chunks: list[dict] = []
     chunk_token_counts: list[int] = []
     seen_chunk_hashes: set[str] = set()
+    chunk_drafts: list = []
 
     ingested = 0
     failed = 0
@@ -185,7 +186,16 @@ def run_pipeline(
         )
 
         chunk_count = 0
+        formula_dump_count = 0
+        # chunk_drafts already initialized at the outer scope
         for idx, draft in enumerate(drafts):
+            if draft.kind == "formula_dump":
+                formula_dump_count += 1
+                if rrow is not None:
+                    rrow["status"] = "skipped"
+                    rrow["reason"] = "formula_dump"
+                chunk_drafts.append(draft)
+                continue
             norm = " ".join(draft.text.split()).lower()
             chash = hashlib.sha1(norm.encode()).hexdigest()
             if chash in seen_chunk_hashes:
@@ -199,19 +209,16 @@ def run_pipeline(
                 "title": source.title,
                 "url": source.url,
                 "category": source.category,
+                "kind": draft.kind,
             }
             all_chunks.append(record)
             chunk_token_counts.append(count_tokens(embedded_text))
             chunk_count += 1
+            chunk_drafts.append(draft)
 
         ingested += 1
         if rrow is not None:
             rrow["status"] = "ingested"
-            rrow["reason"] = "ok"
-            rrow["pages"] = str(doc.pages)
-            rrow["characters"] = str(len(doc.text))
-            rrow["chunks"] = str(chunk_count)
-
     out_chunks.parent.mkdir(parents=True, exist_ok=True)
     with out_chunks.open("w", encoding="utf-8") as handle:
         for record in all_chunks:
@@ -229,6 +236,7 @@ def run_pipeline(
         "sources_ingested": ingested,
         "sources_skipped": skipped,
         "sources_failed": failed,
+        "formula_dump_skipped": sum(1 for d in chunk_drafts if d.kind == "formula_dump"),
         "total_chunks": len(all_chunks),
         "avg_tokens_per_chunk": round(avg_tokens, 2),
         "median_tokens_per_chunk": round(median_tokens, 2),
@@ -259,6 +267,7 @@ def _write_reports(report, totals_obj, json_path, csv_path):
         "pages",
         "characters",
         "chunks",
+        "formula_dump_chunks",
     ]
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
