@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .embeddings import Embedder
 from .errors import RetrievalError
+from .ingest.chunking import add_context_header
 
 DEFAULT_TOP_K = 5
 DEFAULT_BATCH_SIZE = 32
@@ -26,13 +27,21 @@ DEFAULT_BATCH_SIZE = 32
 
 @dataclass(frozen=True, slots=True)
 class Chunk:
-    """One passage of a source document, ready to be embedded and cited."""
+    """One passage of a source document, ready to be embedded and cited.
+
+    The ``text`` field contains the *body* only (no title/section header).
+    The header is added at index time via ``add_context_header``.
+    The ``section`` field records the logical section/heading within the document.
+    The ``kind`` field classifies the chunk type for filtering.
+    """
 
     id: str
     text: str
     title: str
     url: str
     category: str = ""
+    section: str = ""
+    kind: str = "prose"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,11 +52,22 @@ class RetrievedChunk:
     score: float
 
 
+def _normalise_kind(raw: object) -> str:
+    """Map legacy/default kind values onto the public vocabulary.
+
+    Older pipeline builds wrote ``"text"`` for ordinary prose (or omitted
+    ``kind`` entirely).  Both mean ``"prose"`` for indexing purposes.
+    """
+    kind = str(raw or "").strip()
+    return "prose" if kind in {"", "text"} else kind
+
+
 def load_chunks_jsonl(path: str | Path) -> list[Chunk]:
     """Read chunks from a JSON-Lines file (one JSON object per line).
 
     Required keys per line: ``id``, ``text``, ``title``, ``url``.
-    Optional: ``category``.  This is the hand-off format from the Data Engineer.
+    Optional: ``category``, ``section``, ``kind``.
+    This is the hand-off format from the Data Engineer.
     """
     chunks: list[Chunk] = []
     with Path(path).open(encoding="utf-8") as handle:
@@ -63,6 +83,8 @@ def load_chunks_jsonl(path: str | Path) -> list[Chunk]:
                         title=str(row["title"]),
                         url=str(row["url"]),
                         category=str(row.get("category", "")),
+                        section=str(row.get("section", "")),
+                        kind=_normalise_kind(row.get("kind")),
                     )
                 )
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -143,14 +165,28 @@ class Retriever:
     def store(self) -> InMemoryVectorStore:
         return self._store
 
-    async def index(self, chunks: Iterable[Chunk], *, batch_size: int = DEFAULT_BATCH_SIZE) -> int:
-        """Embed and store ``chunks`` (in batches); returns how many were added."""
+    async def index(
+        self,
+        chunks: Iterable[Chunk],
+        *,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        include_non_prose: bool = False,
+    ) -> int:
+        """Embed and store ``chunks`` (in batches); returns how many were added.
+
+        Non-prose chunks (``kind != "prose"``) are skipped by default.  The
+        header (title + section) is prepended to the body text at index time so
+        that both the vector and the stored text include the citation context.
+        """
         if batch_size <= 0:
             raise RetrievalError("batch_size must be greater than 0.")
         items = list(chunks)
+        if not include_non_prose:
+            items = [c for c in items if c.kind == "prose"]
         for start in range(0, len(items), batch_size):
             batch = items[start : start + batch_size]
-            vectors = await self._embedder.embed([c.text for c in batch])
+            texts_with_header = [add_context_header(c.text, c.title, c.section) for c in batch]
+            vectors = await self._embedder.embed(texts_with_header)
             self._store.add(batch, vectors)
         return len(items)
 
