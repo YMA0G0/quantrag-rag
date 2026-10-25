@@ -148,3 +148,79 @@ Final paragraph here."""
     assert "a" in words
     assert "I" in words
     assert "dS" in words
+
+
+# ---------------------------------------------------------------------------
+# Part E: toc / references / boilerplate chunk filters
+# ---------------------------------------------------------------------------
+def test_chunk_filter_classifies_sabr_appendix_b():
+    """SABR Appendix-B notation chunk from docs/phase1_audit.md must not be 'prose'.
+
+    The old SABR Appendix-B chunk lists parameter notations with Greek letters
+    and should be classified as formula_dump (or another non-prose kind),
+    never as plain prose.
+    """
+    from quantrag.ingest.chunking import _chunk_filter_kind
+
+    sabr_appendix_b = """Appendix B: Closed-form expressions for mrSABR
+The following formulas for mrSABR are in Excel format and use notations as
+follows: alp: parameter 𝛼 (initial instantaneous volatility)
+the: parameter 𝜃 (long-term volatility)
+lam: parameter 𝜆 (speed of mean reversion of volatility)
+nu: parameter 𝜈 (lognormal volatility of volatility)
+rho: parameter 𝜌 (correlation)
+T_ex: maturity/expiry of option
+E:"""
+
+    kind = _chunk_filter_kind(sabr_appendix_b)
+    assert kind != "prose", f"SABR Appendix-B should not be prose, got {kind}"
+
+
+def test_chunk_filter_toc_detection():
+    """Table-of-contents chunks with dotted leaders and page numbers are 'toc'."""
+    from quantrag.ingest.chunking import _looks_like_toc
+
+    toc_text = """Contents
+1. Introduction ...... 3
+2. Black-Scholes Model ...... 7
+3. Option Pricing ...... 12
+4. Hedging Strategies ...... 18"""
+    assert _looks_like_toc(toc_text) is True
+
+    normal_text = """This is a normal paragraph about option pricing theory.
+It discusses the Black-Scholes formula and its applications.
+No page numbers or dotted leaders here."""
+    assert _looks_like_toc(normal_text) is False
+
+
+def test_chunk_filter_references_detection():
+    """Reference/bibliography chunks with years and citations are 'references'."""
+    from quantrag.ingest.chunking import _looks_like_references
+
+    ref_text = """References
+Black, F., and Scholes, M. (1973). The Pricing of Options and Corporate
+Liabilities. Journal of Political Economy, 81(3), pp. 637-654.
+Merton, R. C. (1973). Theory of Rational Option Pricing. Bell Journal of
+Economics, 4(1), pp. 141-160.
+doi: 10.2307/1831029"""
+    assert _looks_like_references(ref_text) is True
+
+    normal_text = """This paper discusses option pricing using the Black-Scholes model.
+The key insight is that options can be hedged dynamically.
+No references section here."""
+    assert _looks_like_references(normal_text) is False
+
+
+def test_chunk_filter_boilerplate_detection():
+    """Boilerplate copyright/disclaimer chunks are 'boilerplate'."""
+    from quantrag.ingest.chunking import _looks_like_boilerplate
+
+    boilerplate = """All rights reserved. No part of this publication may be reproduced
+without prior written permission from the publisher.
+Copyright © 2024 University Press."""
+    assert _looks_like_boilerplate(boilerplate) is True
+
+    normal_text = """This is a substantive paragraph about quantitative finance.
+It discusses the mathematics of option pricing in detail.
+The Black-Scholes equation is derived from first principles."""
+    assert _looks_like_boilerplate(normal_text) is False
