@@ -40,6 +40,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--target-tokens", type=int, default=TARGET_TOKENS)
     parser.add_argument("--max-tokens", type=int, default=MAX_TOKENS_HARD)
+    parser.add_argument(
+        "--per-doc-cap",
+        type=float,
+        default=None,
+        help=(
+            "If set, no single source may exceed this fraction of the corpus "
+            "(e.g. 0.25). Off by default."
+        ),
+    )
     args = parser.parse_args(argv)
 
     root = Path.cwd()
@@ -76,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         max_tokens=args.max_tokens,
         manual_csv=manual_csv,
         manual_dir=args.manual_dir,
+        per_doc_cap=args.per_doc_cap,
     )
     print(json.dumps(totals, indent=2))
     return 0

@@ -172,6 +172,7 @@ def run_pipeline(
     min_chars: int = 200,
     manual_csv: str | None = None,
     manual_dir: str | None = None,
+    per_doc_cap: float | None = None,
 ) -> dict:
     cache_dir = cache_dir or raw_dir
     selected, report = select_sources(
@@ -337,17 +338,21 @@ def run_pipeline(
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
-    # Per-document cap: no single source may exceed 25% of the corpus.
-    # Deterministic: keep the first `cap` chunks per over-cap source URL.
-    # Iterate until no source exceeds 25% of the current total.
+    # Per-document cap: no single source may exceed ``per_doc_cap`` of the
+    # corpus.  Opt-in: defaults to off (None).  Deterministic: keeps the
+    # first ``cap`` chunks per over-cap source URL.  Iterates until no
+    # source exceeds the cap.  Records how many chunks were dropped per
+    # document and which sections were dropped.
     # ------------------------------------------------------------------
-    if all_chunks:
+    dropped_per_doc: dict[str, int] = {}
+    dropped_sections: dict[str, list[str]] = {}
+    if per_doc_cap is not None and all_chunks:
         from collections import Counter as _Counter
 
         changed = True
         while changed:
             total = len(all_chunks)
-            cap = max(1, int(total * 0.25))
+            cap = max(1, int(total * per_doc_cap))
             url_counts = _Counter(r["url"] for r in all_chunks)
             over_cap_urls = {u for u, c in url_counts.items() if c > cap}
             if not over_cap_urls:
@@ -360,8 +365,12 @@ def run_pipeline(
                 if u in over_cap_urls:
                     url_seen[u] += 1
                     if url_seen[u] > cap:
+                        dropped_per_doc[u] = dropped_per_doc.get(u, 0) + 1
+                        dropped_sections.setdefault(u, []).append(r.get("section", ""))
                         continue
-                capped_chunks.append(r)
+                    capped_chunks.append(r)
+                else:
+                    capped_chunks.append(r)
             all_chunks = capped_chunks
             chunk_token_counts = [count_tokens(r["text"]) for r in all_chunks]
         # Update report chunk counts for capped sources
@@ -392,6 +401,9 @@ def run_pipeline(
         "references_skipped": sum(1 for d in chunk_drafts if d.kind == "references"),
         "boilerplate_skipped": sum(1 for d in chunk_drafts if d.kind == "boilerplate"),
         "total_chunks": len(all_chunks),
+        "dropped_per_doc": dropped_per_doc,
+        "dropped_sections": dropped_sections,
+        "per_doc_cap": per_doc_cap,
         "avg_tokens_per_chunk": round(avg_tokens, 2),
         "median_tokens_per_chunk": round(median_tokens, 2),
         "max_tokens_per_chunk": max_tokens_actual,
