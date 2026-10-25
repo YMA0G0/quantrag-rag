@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import statistics
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,7 +26,7 @@ from .fetch import (
     find_all_pdf_links,
     find_resource_links,
 )
-from .sources import Source, load_manual_sources, select_sources
+from .sources import Source, load_manual_sources, resolve_category, select_sources
 
 THIN_PAGE_CHARS = 1500
 
@@ -39,9 +40,12 @@ class _Doc:
     followed_from: str
     extractor: str = ""
     quality_score: float = float("inf")
+    category: str = ""
 
 
-def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: str) -> _Doc:
+def _doc_from_bytes(
+    source: Source, data: bytes, used_url: str, followed_from: str, category: str = ""
+) -> _Doc:
     fmt = detect_format(data)
     if fmt == "pdf":
         extracted = extract_pdf(data)
@@ -53,6 +57,7 @@ def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: s
             followed_from,
             extractor=extracted.extractor,
             quality_score=extracted.quality_score,
+            category=category or source.category,
         )
     if fmt == "html":
         extracted = extract_html(data)
@@ -64,20 +69,28 @@ def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: s
             followed_from,
             extractor=extracted.extractor,
             quality_score=extracted.quality_score,
+            category=category or source.category,
         )
     # plain text
     text = data.decode("utf-8", errors="replace")
-    return _Doc(text, 1, "text", used_url, followed_from)
+    return _Doc(text, 1, "text", used_url, followed_from, category=category or source.category)
 
 
 def _get_docs(
-    source: Source, cache_dir: Path, limiter: HostRateLimiter
+    source: Source,
+    cache_dir: Path,
+    limiter: HostRateLimiter,
+    category_resolver: Callable[[str], str | None] | None = None,
 ) -> tuple[list[_Doc] | None, str, dict[str, object] | None]:
     """Return (docs, error_reason, image_profile).
 
     For HTML pages with PDF links, follows up to 15 PDF hops (one hop each),
     returning one _Doc per followed PDF plus the HTML doc itself if no PDF
     links were found.
+
+    ``category_resolver`` resolves the category for hop-found child URLs
+    (from CSV or CATEGORY_MAPPING).  If None, children inherit the parent's
+    category.
     """
     if source.manual_file:
         try:
@@ -85,7 +98,11 @@ def _get_docs(
         except OSError as exc:
             return None, f"manual_read_error: {type(exc).__name__}", None
         try:
-            doc = _doc_from_bytes(source, data, source.url, "")
+            if category_resolver:
+                cat = category_resolver(source.url, source.category)
+            else:
+                cat = source.category
+            doc = _doc_from_bytes(source, data, source.url, "", category=cat)
         except Exception:  # noqa: BLE001
             return None, "extract_error", None
         profile: dict[str, object] | None = None
@@ -113,11 +130,16 @@ def _get_docs(
 
     if fmt == "pdf":
         try:
+            if category_resolver:
+                cat = category_resolver(result.used_url or result.url, source.category)
+            else:
+                cat = source.category
             doc = _doc_from_bytes(
                 source,
                 result.content,
                 result.used_url or result.url,
                 result.followed_from,
+                category=cat,
             )
         except Exception:  # noqa: BLE001
             return None, "extract_error", None
@@ -139,11 +161,17 @@ def _get_docs(
                 )
                 if nested.ok and nested.detected_format == "pdf":
                     try:
+                        cat = (
+                            category_resolver(nested.used_url or pdf_url, source.category)
+                            if category_resolver
+                            else source.category
+                        )
                         doc = _doc_from_bytes(
                             source,
                             nested.content,
                             nested.used_url or nested.url,
                             source.url,  # followed_from = original HTML source
+                            category=cat,
                         )
                     except Exception:  # noqa: BLE001
                         continue
@@ -178,11 +206,17 @@ def _get_docs(
                         if not pdf_nested.ok or pdf_nested.detected_format != "pdf":
                             continue
                         try:
+                            cat = (
+                                category_resolver(pdf_nested.used_url or pdf_url, source.category)
+                                if category_resolver
+                                else source.category
+                            )
                             doc = _doc_from_bytes(
                                 source,
                                 pdf_nested.content,
                                 pdf_nested.used_url or pdf_url,
                                 source.url,  # followed_from = original landing page
+                                category=cat,
                             )
                         except Exception:  # noqa: BLE001
                             continue
@@ -192,11 +226,17 @@ def _get_docs(
 
             # No PDF links: process the HTML page itself
             try:
+                cat = (
+                    category_resolver(result.used_url or result.url, source.category)
+                    if category_resolver
+                    else source.category
+                )
                 doc = _doc_from_bytes(
                     source,
                     result.content,
                     result.used_url or result.url,
                     result.followed_from,
+                    category=cat,
                 )
             except Exception:  # noqa: BLE001
                 return None, "extract_error", None
@@ -205,11 +245,17 @@ def _get_docs(
 
     # plain text or binary
     try:
+        cat = (
+            category_resolver(result.used_url or result.url, source.category)
+            if category_resolver
+            else source.category
+        )
         doc = _doc_from_bytes(
             source,
             result.content,
             result.used_url or result.url,
             result.followed_from,
+            category=cat,
         )
     except Exception:  # noqa: BLE001
         return None, "extract_error", None
@@ -274,6 +320,17 @@ def run_pipeline(
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     limiter = HostRateLimiter()
+
+    # Build a category resolver: hop-found children get their category from
+    # CATEGORY_MAPPING or inherit the parent's category (if in allow-list).
+    def _make_resolver() -> Callable[[str, str], str | None]:
+        def resolver(url: str, fallback: str) -> str | None:
+            return resolve_category(url, fallback)
+
+        return resolver
+
+    category_resolver = _make_resolver()
+
     all_chunks: list[dict] = []
     chunk_token_counts: list[int] = []
     seen_chunk_hashes: set[str] = set()
@@ -285,7 +342,7 @@ def run_pipeline(
 
     for source in selected:
         rrow = report_by_url.get((source.url, source.origin))
-        docs, err, image_profile = _get_docs(source, cache_dir, limiter)
+        docs, err, image_profile = _get_docs(source, cache_dir, limiter, category_resolver)
 
         if docs is None:
             # Distinguish fetch failures from extraction failures.

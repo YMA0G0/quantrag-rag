@@ -604,21 +604,72 @@ _SEGMENT_DICT = frozenset(
         "coverage",
         "stable",
         "funding",
+        # Words needed for squashed-prose segmentation in the corpus
+        "simplest",
+        "quadrature",
+        "approximates",
+        "throughout",
+        "chapter",
+        "independently",
+        "choice",
+        "representation",
+        "equivalence",
+        "optimal",
+        "approximation",
     }
 )
 
 
 def _split_camel_case(text: str) -> str:
-    """Split CamelCase identifiers into separate words.
+    """Split CamelCase identifiers in prose text only.
 
     ``SimpleGenericMonteCarloClass`` -> ``Simple Generic Monte Carlo Class``.
     Preserves newlines; never touches tokens of length <= 2.
+    Skips lines that look like math formulas (contain =, +, -, *, /, ^, _,
+    or math symbols) and known math names (EulerMaruyama, Milstein, etc.).
     """
-    # Lowercase -> Uppercase boundary:  lowerUpper  ->  lower Upper
-    result = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
-    # Acronym -> Word boundary:  URLParser  ->  URL Parser
-    result = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", result)
-    return result
+    # Math names that must stay intact
+    _MATH_NAMES = frozenset(
+        {
+            "EulerMaruyama",
+            "Euler Maruyama",
+            "Milstein",
+            "OrnsteinUhlenbeck",
+            "Ornstein Uhlenbeck",
+            "Girsanov",
+            "BlackScholes",
+            "Black Scholes",
+            "Heston",
+            "SABR",
+            "Vasicek",
+            "HullWhite",
+            "Hull White",
+            "CIR",
+            "Ito",
+            "Itô",
+            " GBM",
+            "MC",
+            "SDE",
+            "PDE",
+        }
+    )
+
+    result_lines: list[str] = []
+    for line in text.split("\n"):
+        # Skip formula lines (contain math operators or symbols)
+        if any(ch in line for ch in "=+-*/^_∫∂∑√∞∈∀∃∈∝∪∩⊂⊃"):
+            result_lines.append(line)
+            continue
+        # Skip known math names
+        if any(name in line for name in _MATH_NAMES):
+            result_lines.append(line)
+            continue
+        # Lowercase -> Uppercase boundary:  lowerUpper  ->  lower Upper
+        result = re.sub(r"([a-z])([A-Z])", r"\1 \2", line)
+        # Acronym -> Word boundary:  URLParser  ->  URL Parser
+        result = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", result)
+        result_lines.append(result)
+    return "\n".join(result_lines)
 
 
 def _is_likely_split_word(w1: str, w2: str) -> bool:
@@ -638,8 +689,8 @@ def _is_likely_split_word(w1: str, w2: str) -> bool:
         return False
     if w1[-1].lower() in COMMON_WORD_END_LETTERS:
         return False
-    # If both parts are common standalone words, don't join them.
-    if w1.lower() in COMMON_STANDALONE_WORDS and w2.lower() in COMMON_STANDALONE_WORDS:
+    # If either part is a common standalone word, don't join them.
+    if w1.lower() in COMMON_STANDALONE_WORDS or w2.lower() in COMMON_STANDALONE_WORDS:
         return False
     combined = w1 + w2
     return any(combined.endswith(s) for s in COMMON_WORD_SUFFIXES)
@@ -729,36 +780,40 @@ def _segment_squashed_prose(text: str) -> str:
     ``Thesimplestquadraturethatapproximates``.  Apply maximum matching
     against a small dictionary to reinsert spaces.  Only applied to runs of
     26+ lowercase letters; math formulas and mixed-case text are untouched.
+    If no dictionary match is found at all, the run is left unchanged.
     """
 
     def _segment_run(run: str) -> str:
-        # Maximum matching word segmentation
+        # Maximum matching word segmentation (case-insensitive dictionary).
+        run_lower = run.lower()
         result: list[str] = []
         i = 0
-        while i < len(run):
-            # Try longest match first
+        while i < len(run_lower):
             matched = False
-            for j in range(min(i + 30, len(run)), i + 2, -1):
-                word = run[i:j]
+            for j in range(min(i + 30, len(run_lower)), i + 1, -1):
+                word = run_lower[i:j]
                 if word in _SEGMENT_DICT:
-                    result.append(word)
+                    # Preserve original capitalization for the first word
+                    original = run[i:j]
+                    if i == 0 and original[0].isupper():
+                        original = original[0].upper() + original[1:].lower()
+                    result.append(original)
                     i = j
                     matched = True
                     break
             if not matched:
-                # No dictionary match; take one character and move on
-                result.append(run[i])
-                i += 1
+                # No dictionary match at all: keep the run unchanged
+                return run
         return " ".join(result)
 
-    # Only process runs of 26+ lowercase letters
+    # Only process runs of 26+ letters (all alphabetic, case-insensitive)
     def _replace(m: re.Match) -> str:
         run = m.group(0)
-        if len(run) >= 26 and run.islower() and run.isalpha():
+        if len(run) >= 26 and run.isalpha():
             return _segment_run(run)
         return run
 
-    return re.sub(r"[a-z]{26,}", _replace, text)
+    return re.sub(r"[A-Za-z]{26,}", _replace, text)
 
 
 def _nfkc(text: str) -> str:
@@ -1015,6 +1070,19 @@ def _score_extraction(text: str) -> float:
         "day",
         "most",
         "us",
+        # Words needed for squashed-prose segmentation in the corpus
+        "simplest",
+        "quadrature",
+        "approximates",
+        "throughout",
+        "chapter",
+        "independently",
+        "choice",
+        "representation",
+        "equivalence",
+        "strong",
+        "optimal",
+        "approximation",
     }
     words = re.findall(r"\b[a-zA-Z]+\b", text.lower())
     vocab_miss = sum(1 for w in words if w not in common) / len(words) if words else 0.0

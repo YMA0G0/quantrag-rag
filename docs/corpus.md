@@ -23,10 +23,10 @@ The same command with `--dry-run` previews source selection (writes
 | Field | Value |
 |---|---|
 | File | `data/chunks.jsonl` (git-ignored) |
-| sha256 | `d4330b5e39f1ed0ee36a71ac0deaabfcdf006a955959ebde923bf0317070f0e6` |
-| Chunks | 559 |
-| Source documents | 16 |
-| Pipeline commit | `733368a` (feat(ingest): make per-document cap opt-in, default off) |
+| sha256 | `71ff2361052224c244141d75be55fa7c4c098b23d1767d870fb819c9bd656dbd` |
+| Chunks | 501 |
+| Source documents | 14 |
+| Pipeline commit | `822771c` (fix(ingest): extractor selection, single-symbol lines, squashed prose, join audit fix, landing page second hop) |
 | Format per line | `{"id","text","title","url","category"}` + optional `section`, `kind` (`prose`\|`formula_dump`\|`toc`\|`references`\|`boilerplate`) |
 
 `chunk.text` is body only; the header `"{title} — {section}"` is added at index
@@ -39,12 +39,13 @@ files without `section`/`kind` (legacy `kind` values normalize to `prose`).
 This snapshot reflects the half-finished ingestion and is **not** the target
 state. Verified problems:
 
-- **Off-list categories removed**: QuantLib (156), Financial NLP (14), RL for
-  Portfolio (9) were excluded by the strict category allow-list. "University
-  Courses and Lecture Notes" added to allow-list to admit tier-1 lecture notes
-  (Kohn, Goodman, MIT 15.450 index).
-- **Imbalance**: Monte Carlo arXiv 2208.05531 = 220 chunks (39%) and Bielefeld
-  NumSDE = 102 (18%). Per-document cap (25%) available via `--per-doc-cap 0.25`
+- **Off-list categories excluded**: "University Courses and Lecture Notes" was
+  removed from `CORE_CATEGORIES`; tier never admits off-list categories.  The
+  MIT 15.450 lecture-notes index page (off-list category) is not fetched, so its
+  58 chunks are absent from the corpus. Individual MIT 15.450 lecture resources
+  (categories in the allow-list) are admitted directly as separate CSV entries.
+- **Imbalance**: Monte Carlo arXiv 2208.05531 = 220 chunks (44%) and Bielefeld
+  NumSDE = 102 (20%). Per-document cap (25%) available via `--per-doc-cap 0.25`
   (opt-in, default off). "Black–Scholes and Option Pricing" has 9 chunks,
   Stochastic Processes 9, SDEs 5, Heston/SABR 17, Greeks 55, Stochastic
   Calculus 70.
@@ -52,14 +53,17 @@ state. Verified problems:
   TOC (Bielefeld), boilerplate (MIT Terms of Use), references (FinRL-X) all
   detected.
 - **26+ letter runs**: 1 remaining ("strongoptimalapproximation" in Monte Carlo).
-- **Chunk size**: median 572 tokens, max 663, 0 over 800, 94.1% in 400-800 range.
+- **Chunk size**: median 570 tokens, max 663, 0 over 800, 93.8% in 400-800 range.
 - **Short lines <=2 chars**: all documents under 5% (max 1.5%).
+- **Topic coverage (chunk text)**: "Put–call parity" (2 chunks), "Milstein"
+  (1 chunk), "Hull–White" (3 chunks) are thin (< 5 chunks). "Variance reduction"
+  (8 chunks) and "Heston"/"SABR" (9 chunks each) are also limited.
 - Columbia IEOR 6712 notes ingested manually (6 chunks); NYU Avellaneda
   DSLecture6.pdf is image-locked (~194 chars/page) and correctly marked
   needs_ocr and excluded.
 - Tier-1 landing pages (NYU Kohn, Goodman) blocked by robots.txt; MIT 15.450
-  lecture-notes index accessible via second hop (58 chunks).
-- CSU Stanislaus "High Finance" page: no PDF links found, not ingested.
+  lecture-notes index blocked (off-list category); CSU Stanislaus "High Finance"
+  page: no PDF links found, not ingested.
 
 ## Licence caveat
 
@@ -83,3 +87,26 @@ underlying PDFs without reviewing each source's licence.
 - `3ae5a63`: ruff format chunking.py
 - `733368a`: per-document cap opt-in (default off); extractor selection in report
 - `be3ba1d`: landing pages fetched for PDF hops; second hop for MIT 15.450
+- `822771c`: extractor selection, single-symbol lines, squashed prose, join audit fix, landing page second hop
+
+## Corpus coverage (chunk text, case-insensitive)
+
+| Topic | Chunks | Share | Status |
+|---|---|---|---|
+| Black–Scholes | 47 | 9.4% | |
+| Put–call parity | 2 | 0.4% | THIN (< 5 chunks) |
+| Delta/Gamma/Vega | 42 | 8.4% | |
+| Itô | 92 | 18.4% | |
+| GBM | 11 | 2.2% | |
+| SDE | 61 | 12.2% | |
+| Euler–Maruyama | 14 | 2.8% | |
+| Milstein | 1 | 0.2% | THIN (< 5 chunks) |
+| Monte Carlo | 50 | 10.0% | |
+| Variance reduction | 8 | 1.6% | |
+| Heston | 9 | 1.8% | |
+| SABR | 9 | 1.8% | |
+| Vasicek | 7 | 1.4% | |
+| Hull–White | 3 | 0.6% | THIN (< 5 chunks) |
+| CIR | 10 | 2.0% | |
+
+Topics with < 5 chunks are known gaps: Put–call parity, Milstein, Hull–White.

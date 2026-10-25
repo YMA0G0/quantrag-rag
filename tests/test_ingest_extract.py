@@ -1,11 +1,15 @@
 """Extraction tests with tiny fixtures."""
 
+import json
 from io import BytesIO
+from pathlib import Path
 
+import pytest
 from pypdf import PdfWriter
 
 from quantrag.ingest import extract
 from quantrag.ingest.chunking import corpus_health_check
+from quantrag.ingest.sources import CORE_CATEGORIES
 
 
 def test_extract_pdf_headers_page_numbers_logic():
@@ -226,3 +230,139 @@ https://ocw.mit.edu/terms."""
 It discusses the mathematics of option pricing in detail.
 The Black-Scholes equation is derived from first principles."""
     assert _looks_like_boilerplate(normal_text) is False
+
+
+# ---------------------------------------------------------------------------
+# Part F: extractor selection, text normalization, join predicate
+# ---------------------------------------------------------------------------
+def test_extractor_selection_chooses_best(monkeypatch):
+    """select_best_extractor picks the extractor with the lowest score."""
+    from quantrag.ingest import extract
+
+    # All extractors return the same text; _score_extraction is monkeypatched
+    # to return different scores.
+    def same_extractor(data):
+        return "same text"
+
+    monkeypatch.setattr(extract, "_extract_pypdf_default", same_extractor)
+    monkeypatch.setattr(extract, "_extract_pypdf_layout", same_extractor)
+    monkeypatch.setattr(extract, "_extract_pdfplumber", same_extractor)
+    monkeypatch.setattr(extract, "_extract_pdfminer", same_extractor)
+
+    scores = [10.0, 5.0, 20.0, 15.0]
+    call_count = [0]
+
+    def fake_score(text):
+        call_count[0] += 1
+        return scores[call_count[0] - 1]
+
+    monkeypatch.setattr(extract, "_score_extraction", fake_score)
+
+    name, text, score, all_scores = extract.select_best_extractor(b"fake pdf data")
+    assert name == "pypdf layout"
+    assert score == 5.0
+
+
+def test_extractor_selection_handles_failures(monkeypatch):
+    """select_best_extractor skips extractors that raise exceptions."""
+    from quantrag.ingest import extract
+
+    def failing_extractor(data):
+        raise ValueError("boom")
+
+    def good_extractor(data):
+        return "good text"
+
+    monkeypatch.setattr(extract, "_extract_pypdf_default", failing_extractor)
+    monkeypatch.setattr(extract, "_extract_pypdf_layout", failing_extractor)
+    monkeypatch.setattr(extract, "_extract_pdfplumber", failing_extractor)
+    monkeypatch.setattr(extract, "_extract_pdfminer", good_extractor)
+
+    name, text, score, all_scores = extract.select_best_extractor(b"fake pdf data")
+    assert name == "pdfminer.six"
+    assert text == "good text"
+    assert all_scores == {"pdfminer.six": extract._score_extraction("good text")}
+
+
+def test_normalize_single_symbol_lines():
+    """Stranded single-symbol lines are merged into the previous line."""
+    from quantrag.ingest.extract import _normalize_single_symbol_lines
+
+    text = "Some formula here.\nn\nk\nNext paragraph."
+    result = _normalize_single_symbol_lines(text)
+    assert "Some formula here. n k" in result
+    assert "Next paragraph." in result
+
+    # Lines that are not single symbols are kept as-is
+    text2 = "Normal line.\nThis is a normal line.\nAnother line."
+    result2 = _normalize_single_symbol_lines(text2)
+    assert result2 == text2
+
+
+def test_segment_squashed_prose_positive():
+    """Squashed prose runs are segmented using the dictionary."""
+    from quantrag.ingest.extract import _segment_squashed_prose
+
+    text = "Thesimplestquadraturethatapproximates (2.1)istherectangle quadrature"
+    result = _segment_squashed_prose(text)
+    assert "simplest" in result
+    assert "quadrature" in result
+    assert "approximates" in result
+    assert result != text
+
+
+def test_segment_squashed_prose_negative_math_names():
+    """Math names are not segmented."""
+    from quantrag.ingest.extract import _segment_squashed_prose
+
+    for name in ["EulerMaruyama", "Milstein", "OrnsteinUhlenbeck", "Girsanov", "BlackScholes"]:
+        result = _segment_squashed_prose(name)
+        assert result == name, f"{name} was changed to {result}"
+
+
+def test_segment_squashed_prose_negative_formulas():
+    """Math formulas are not segmented."""
+    from quantrag.ingest.extract import _segment_squashed_prose
+
+    text = "dS_t = mu S_t dt + sigma S_t dW_t"
+    result = _segment_squashed_prose(text)
+    assert result == text
+
+
+def test_join_predicate_rejects_two_standalone_words():
+    """Two common standalone words are not joined."""
+    from quantrag.ingest.extract import _is_likely_split_word
+
+    assert not _is_likely_split_word("www", "googletagmanager")
+    assert not _is_likely_split_word("Cardo", "Italic")
+    assert not _is_likely_split_word("the", "cat")
+    assert not _is_likely_split_word("a", "able")
+
+
+def test_join_predicate_accepts_split_fragments():
+    """Word fragments are joined when they form a valid word."""
+    from quantrag.ingest.extract import _is_likely_split_word
+
+    assert _is_likely_split_word("vari", "able")
+    assert _is_likely_split_word("corre", "sponding")
+    assert _is_likely_split_word("log", "normal")
+
+
+# ---------------------------------------------------------------------------
+# Part G: corpus category allow-list test
+# ---------------------------------------------------------------------------
+def test_no_chunk_has_offlist_category():
+    """No chunk in data/chunks.jsonl has a category outside CORE_CATEGORIES."""
+    chunks_path = Path("data/chunks.jsonl")
+    if not chunks_path.exists():
+        pytest.skip("data/chunks.jsonl not found; run ingest first")
+
+    off_list = []
+    with chunks_path.open(encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            cat = row.get("category", "")
+            if cat and cat not in CORE_CATEGORIES:
+                off_list.append((row["id"], cat))
+
+    assert not off_list, f"Off-list categories found: {off_list[:10]}"

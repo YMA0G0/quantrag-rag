@@ -44,9 +44,41 @@ CORE_CATEGORIES = frozenset(
         "Financial Derivatives and Exotic Options",
         "Computational Finance and Numerical Methods",
         "Fixed Income and Interest Rate Models",
-        "University Courses and Lecture Notes",
     }
 )
+
+# Explicit category mapping table for children found via landing-page hops.
+# Maps a source URL prefix to an allowed core category.
+# Children found via hops that are not in the CSV get their category from
+# this table; if no mapping exists, they are excluded.
+# Review this table before adding new entries.
+CATEGORY_MAPPING: dict[str, str] = {
+    # Example:
+    # "https://example.com/lectures/": "Stochastic Calculus and Itô's Lemma",
+}
+
+
+def resolve_category(url: str, csv_category: str | None = None) -> str | None:
+    """Resolve the category for a source URL.
+
+    Resolution order:
+    1. Explicit CATEGORY_MAPPING entry (URL prefix match).
+    2. CSV category if it is in CORE_CATEGORIES.
+    3. None (excluded).
+
+    Returns the resolved category or None if the source should be excluded.
+    """
+    # 1. Explicit mapping table (prefix match)
+    for prefix, cat in CATEGORY_MAPPING.items():
+        if url.startswith(prefix):
+            return cat
+    # 2. CSV category if allowed
+    if csv_category and csv_category in CORE_CATEGORIES:
+        return csv_category
+    # 3. Excluded
+    return None
+
+
 CORE_MAX_TIER = 2
 
 _PRESS_MARKERS = (

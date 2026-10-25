@@ -86,6 +86,52 @@ def test_one_hop_pdf_follow_keeps_original_url(tmp_path):
     client.close()
 
 
+def test_second_hop_resources_to_pdf(tmp_path):
+    """find_resource_links finds /resources/ links on landing pages."""
+    landing = (
+        b"<!doctype html><html><body>"
+        b'<a href="/courses/15-450/resources/lec02/">Lecture 2</a>'
+        b'<a href="/courses/15-450/resources/lec03/">Lecture 3</a>'
+        b'<a href="/other/page">Other</a>'
+        b"</body></html>"
+    )
+    links = fetch.find_resource_links(landing, "http://example.com/courses/15-450/", max_links=15)
+    assert len(links) == 2
+    assert "http://example.com/courses/15-450/resources/lec02/" in links
+    assert "http://example.com/courses/15-450/resources/lec03/" in links
+    assert "http://example.com/other/page" not in links
+
+
+def test_second_hop_respects_cap_15(tmp_path):
+    """Second hop is capped at 15 resource links."""
+    landing_links = "".join(
+        f'<a href="/courses/15-450/resources/lec{i:02d}.pdf">Lecture {i:02d}</a>' for i in range(20)
+    )
+    landing = b"<!doctype html><html><body>" + landing_links.encode() + b"</body></html>"
+
+    pdf = b"%PDF-1.4 fake pdf body"
+
+    pdf_requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/courses/15-450/":
+            return httpx.Response(200, content=landing, headers={"content-type": "text/html"})
+        if path.startswith("/courses/15-450/resources/") and path.endswith(".pdf"):
+            pdf_requests.append(path)
+            return httpx.Response(200, content=pdf, headers={"content-type": "application/pdf"})
+        return httpx.Response(404)
+
+    original = "http://example.com/courses/15-450/"
+    client = _client(handler)
+    res = fetch.fetch(
+        original, cache_dir=tmp_path, rate_limiter=fetch.HostRateLimiter(0), client=client
+    )
+    assert res.ok
+    assert len(pdf_requests) <= 15, f"Expected <= 15 PDF requests, got {len(pdf_requests)}"
+    client.close()
+
+
 def test_arxiv_abs_rewritten_to_pdf(tmp_path):
     seen = {}
 
