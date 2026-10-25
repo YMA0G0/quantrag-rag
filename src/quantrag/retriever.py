@@ -17,9 +17,9 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from .context import add_context_header
 from .embeddings import Embedder
 from .errors import RetrievalError
-from .ingest.chunking import add_context_header
 
 DEFAULT_TOP_K = 5
 DEFAULT_BATCH_SIZE = 32

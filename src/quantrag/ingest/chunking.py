@@ -12,6 +12,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from quantrag.context import add_context_header
+
 TARGET_TOKENS = 600
 MAX_TOKENS_HARD = 900
 OVERLAP_RATIO = 0.12
@@ -364,13 +366,6 @@ def chunk_text(
 
 def make_chunk_id(url: str, index: int) -> str:
     return f"{hashlib.sha1(url.encode()).hexdigest()[:10]}-{index:04d}"
-
-
-def add_context_header(text: str, title: str, section: str) -> str:
-    header = title.strip()
-    if section.strip():
-        header = f"{header} — {section.strip()}"
-    return f"{header}\n\n{text.strip()}"
 
 
 # ---------------------------------------------------------------------------

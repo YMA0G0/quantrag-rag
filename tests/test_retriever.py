@@ -192,3 +192,41 @@ def test_load_chunks_jsonl_reports_the_bad_line(tmp_path) -> None:
     with pytest.raises(RetrievalError) as excinfo:
         load_chunks_jsonl(path)
     assert "line 1" in str(excinfo.value)
+
+
+def test_retriever_imports_without_heavy_ingest_deps() -> None:
+    """quantrag.retriever must import with pypdf/trafilatura/pdfplumber blocked.
+
+    Guards the architectural rule that the retrieval layer (and thus the MCP
+    server / FastAPI app) never transitively depends on the heavy ingestion
+    package.  ``add_context_header`` lives in the neutral ``quantrag.context``
+    module and is shared by both retriever and ingest.chunking.
+    """
+    import sys
+
+    heavy = ("pypdf", "trafilatura", "pdfplumber", "pdfminer", "pdfminer.high_level")
+    saved: dict[str, object | None] = {}
+    for name in heavy:
+        saved[name] = sys.modules.pop(name, None)
+        sys.modules[name] = None
+
+    # Drop quantrag modules so they are re-imported without the heavy deps.
+    quantrag_keys = [k for k in sys.modules if k == "quantrag" or k.startswith("quantrag.")]
+    for k in quantrag_keys:
+        del sys.modules[k]
+
+    try:
+        import quantrag.context as context
+        import quantrag.ingest.chunking as chunking
+        import quantrag.retriever as retriever
+
+        assert retriever.add_context_header is context.add_context_header
+        assert chunking.add_context_header is context.add_context_header
+        # Sanity: the header function itself still works.
+        assert context.add_context_header("body", "Title", "Section") == "Title — Section\n\nbody"
+    finally:
+        for name in heavy:
+            if saved[name] is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = saved[name]
