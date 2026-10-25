@@ -136,6 +136,51 @@ def find_all_pdf_links(content: bytes, base_url: str, max_links: int = 15) -> li
     return links
 
 
+def find_resource_links(content: bytes, base_url: str, max_links: int = 15) -> list[str]:
+    """Return same-host links containing "/resources/" from a landing page.
+
+    Used for MIT OCW-style landing pages that link to resource sub-pages
+    rather than direct PDFs.  Preserves document order, deduplicates by
+    normalised URL.
+    """
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        return []
+
+    try:
+        base_parts = urlsplit(base_url)
+        base_host = base_parts.hostname or ""
+    except Exception:
+        return []
+
+    seen: set[str] = set()
+    links: list[str] = []
+
+    for match in re.finditer(r'href\s*=\s*["\']([^"\']+)["\']', text, re.IGNORECASE):
+        href = match.group(1)
+        candidate = urljoin(base_url, href)
+        try:
+            parts = urlsplit(candidate)
+        except Exception:
+            continue
+        # Same host only
+        if parts.hostname != base_host:
+            continue
+        norm = candidate.lower().split("?")[0]
+        # Must contain "/resources/"
+        if "/resources/" not in norm:
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        links.append(candidate)
+        if len(links) >= max_links:
+            return links
+
+    return links
+
+
 def cache_path(cache_dir: Path, url: str, ext: str = ".bin") -> Path:
     return cache_dir / f"{hashlib.sha1(url.encode()).hexdigest()}{ext}"
 

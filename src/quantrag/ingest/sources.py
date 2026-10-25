@@ -44,6 +44,7 @@ CORE_CATEGORIES = frozenset(
         "Financial Derivatives and Exotic Options",
         "Computational Finance and Numerical Methods",
         "Fixed Income and Interest Rate Models",
+        "University Courses and Lecture Notes",
     }
 )
 CORE_MAX_TIER = 2

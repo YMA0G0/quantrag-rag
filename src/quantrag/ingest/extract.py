@@ -18,6 +18,8 @@ class Extracted:
     pages: int
     content_type: str  # 'pdf' or 'html'
     extractor: str = ""
+    quality_score: float = float("inf")
+    all_scores: dict[str, float] | None = None
 
 
 # Ligature map for U+FB00–U+FB06 (per Unicode Standard)
@@ -74,6 +76,538 @@ COMMON_WORD_SUFFIXES = frozenset(
 COMMON_WORD_END_LETTERS = frozenset("d t s n r l")
 
 
+# Common standalone English words that should NOT be joined with another word.
+# If both w1 and w2 are in this set, the join is almost certainly a false positive.
+COMMON_STANDALONE_WORDS = frozenset(
+    {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "data",
+        "stock",
+        "model",
+        "risk",
+        "time",
+        "market",
+        "price",
+        "option",
+        "bond",
+        "var",
+        "system",
+        "process",
+        "method",
+        "analysis",
+        "are",
+        "was",
+        "were",
+        "been",
+        "have",
+        "has",
+        "had",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "can",
+        "must",
+        "shall",
+        "do",
+        "does",
+        "did",
+        "not",
+        "no",
+        "yes",
+        "all",
+        "any",
+        "some",
+        "most",
+        "many",
+        "much",
+        "such",
+        "both",
+        "each",
+        "either",
+        "neither",
+        "another",
+        "other",
+        "others",
+        "several",
+        "few",
+        "little",
+        "less",
+        "more",
+        "what",
+        "which",
+        "who",
+        "whose",
+        "whom",
+        "where",
+        "when",
+        "why",
+        "how",
+        "here",
+        "there",
+        "now",
+        "then",
+        "today",
+        "tomorrow",
+        "yesterday",
+        "this",
+        "that",
+        "these",
+        "those",
+        "a",
+        "i",
+        "an",
+        "of",
+        "in",
+        "on",
+        "at",
+        "by",
+        "to",
+        "as",
+        "if",
+        "or",
+        "but",
+        "so",
+        "yet",
+        "nor",
+        "be",
+        "am",
+        "is",
+        "it",
+        "he",
+        "she",
+        "they",
+        "we",
+        "you",
+        "me",
+        "him",
+        "her",
+        "us",
+        "them",
+        "my",
+        "your",
+        "his",
+        "its",
+        "our",
+        "their",
+        "www",
+        "http",
+        "com",
+        "org",
+        "edu",
+        "gov",
+        "net",
+        "int",
+        "ftp",
+        "cardo",
+        "times",
+        "helvetica",
+        "arial",
+        "courier",
+        "symbol",
+        "zapfdingbats",
+    }
+)
+
+# Small dictionary for word segmentation of squashed prose (long lowercase runs).
+# Only used as a maximum-matching fallback; not a general-purpose dictionary.
+_SEGMENT_DICT = frozenset(
+    {
+        "the",
+        "be",
+        "to",
+        "of",
+        "and",
+        "a",
+        "in",
+        "that",
+        "have",
+        "i",
+        "it",
+        "for",
+        "not",
+        "on",
+        "with",
+        "he",
+        "as",
+        "you",
+        "do",
+        "at",
+        "this",
+        "but",
+        "his",
+        "by",
+        "from",
+        "they",
+        "we",
+        "say",
+        "her",
+        "she",
+        "or",
+        "an",
+        "will",
+        "my",
+        "one",
+        "all",
+        "would",
+        "there",
+        "their",
+        "what",
+        "so",
+        "up",
+        "out",
+        "if",
+        "about",
+        "who",
+        "get",
+        "which",
+        "go",
+        "me",
+        "when",
+        "make",
+        "can",
+        "like",
+        "time",
+        "no",
+        "just",
+        "him",
+        "know",
+        "take",
+        "people",
+        "into",
+        "year",
+        "your",
+        "good",
+        "some",
+        "could",
+        "them",
+        "see",
+        "other",
+        "than",
+        "then",
+        "now",
+        "look",
+        "only",
+        "come",
+        "its",
+        "over",
+        "think",
+        "also",
+        "back",
+        "after",
+        "use",
+        "two",
+        "how",
+        "our",
+        "work",
+        "first",
+        "well",
+        "way",
+        "even",
+        "new",
+        "want",
+        "because",
+        "any",
+        "these",
+        "give",
+        "day",
+        "most",
+        "us",
+        "is",
+        "are",
+        "was",
+        "were",
+        "been",
+        "has",
+        "had",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "yet",
+        "nor",
+        "am",
+        # Math/finance terms that commonly appear squashed
+        "theorem",
+        "proof",
+        "lemma",
+        "corollary",
+        "definition",
+        "example",
+        "remark",
+        "proposition",
+        "equation",
+        "formula",
+        "function",
+        "variable",
+        "process",
+        "stochastic",
+        "calculus",
+        "integral",
+        "derivative",
+        "differential",
+        "brownian",
+        "motion",
+        "martingale",
+        "measure",
+        "probability",
+        "random",
+        "space",
+        "filter",
+        "filtration",
+        "stopping",
+        "optional",
+        "sampling",
+        "ito",
+        "black",
+        "scholes",
+        "option",
+        "pricing",
+        "monte",
+        "carlo",
+        "simulation",
+        "heston",
+        "sabr",
+        "vasicek",
+        "hull",
+        "white",
+        "euler",
+        "maruyama",
+        "milstein",
+        "binomial",
+        "tree",
+        "greeks",
+        "delta",
+        "gamma",
+        "vega",
+        "theta",
+        "rho",
+        "implied",
+        "volatility",
+        "put",
+        "call",
+        "parity",
+        "arbitrage",
+        "risk",
+        "neutral",
+        "hedging",
+        "portfolio",
+        "asset",
+        "return",
+        "variance",
+        "covariance",
+        "correlation",
+        "regression",
+        "series",
+        "gaussian",
+        "normal",
+        "distribution",
+        "density",
+        "cumulative",
+        "expectation",
+        "standard",
+        "deviation",
+        "mean",
+        "median",
+        "mode",
+        "quantile",
+        "confidence",
+        "interval",
+        "hypothesis",
+        "test",
+        "p-value",
+        "significance",
+        "level",
+        "power",
+        "sample",
+        "size",
+        "estimator",
+        "estimate",
+        "bias",
+        "consistent",
+        "efficient",
+        "sufficient",
+        "complete",
+        "family",
+        "exponential",
+        "poisson",
+        "geometric",
+        "negative",
+        "markov",
+        "chain",
+        "transition",
+        "matrix",
+        "stationary",
+        "ergodic",
+        "law",
+        "large",
+        "numbers",
+        "central",
+        "limit",
+        "characteristic",
+        "moment",
+        "generating",
+        "cumulant",
+        "sde",
+        "ode",
+        "pde",
+        "boundary",
+        "condition",
+        "initial",
+        "dirichlet",
+        "neumann",
+        "cauchy",
+        "problem",
+        "posed",
+        "existence",
+        "uniqueness",
+        "strong",
+        "weak",
+        "solution",
+        "pathwise",
+        "comparison",
+        "principle",
+        "maximum",
+        "minimum",
+        "dynamic",
+        "programming",
+        "optimality",
+        "hamilton",
+        "jacobi",
+        "bellman",
+        "control",
+        "pontryagin",
+        "feynman",
+        "kac",
+        "girsanov",
+        "novikov",
+        "kamensky",
+        "kurtosis",
+        "skewness",
+        "markowitz",
+        "theory",
+        "capm",
+        "model",
+        "cir",
+        "local",
+        "jump",
+        "diffusion",
+        "levy",
+        "merton",
+        "bates",
+        "fixing",
+        "date",
+        "maturity",
+        "tenor",
+        "strike",
+        "spot",
+        "forward",
+        "future",
+        "swap",
+        "cap",
+        "floor",
+        "swaption",
+        "contract",
+        "futures",
+        "european",
+        "american",
+        "bermudan",
+        "asian",
+        "barrier",
+        "lookback",
+        "chooser",
+        "compound",
+        "basket",
+        "rainbow",
+        "digital",
+        "binary",
+        "exotic",
+        "interest",
+        "rate",
+        "currency",
+        "commodity",
+        "equity",
+        "index",
+        "credit",
+        "fixed",
+        "income",
+        "mortgage",
+        "backed",
+        "security",
+        "collateralized",
+        "debt",
+        "obligation",
+        "default",
+        "linked",
+        "note",
+        "spread",
+        "total",
+        "tranches",
+        "senior",
+        "mezzanine",
+        "tranche",
+        "loan",
+        "residential",
+        "commercial",
+        "prime",
+        "subprime",
+        "alt",
+        "arm",
+        "real",
+        "estate",
+        "investment",
+        "trust",
+        "pass",
+        "through",
+        "strips",
+        "principal",
+        "bond",
+        "paper",
+        "certificate",
+        "deposit",
+        "repurchase",
+        "agreement",
+        "reverse",
+        "securities",
+        "lending",
+        "borrowing",
+        "margin",
+        "short",
+        "sale",
+        "covering",
+        "squeeze",
+        "position",
+        "long",
+        "net",
+        "gross",
+        "exposure",
+        "market",
+        "operational",
+        "liquidity",
+        "basel",
+        "accord",
+        "ii",
+        "iii",
+        "capital",
+        "adequacy",
+        "ratio",
+        "weighted",
+        "assets",
+        "tier",
+        "leverage",
+        "coverage",
+        "stable",
+        "funding",
+    }
+)
+
+
 def _split_camel_case(text: str) -> str:
     """Split CamelCase identifiers into separate words.
 
@@ -95,12 +629,17 @@ def _is_likely_split_word(w1: str, w2: str) -> bool:
     - w2 must be 3+ letters
     - w1 must NOT end with a common word-final letter
     - w1 + w2 must end with a common English suffix
+    - NOT both w1 and w2 are common standalone words (avoids joining
+      e.g. "www" + "googletagmanager")
     """
     if len(w1) < 3 or len(w1) > 6:
         return False
     if len(w2) < 3:
         return False
     if w1[-1].lower() in COMMON_WORD_END_LETTERS:
+        return False
+    # If both parts are common standalone words, don't join them.
+    if w1.lower() in COMMON_STANDALONE_WORDS and w2.lower() in COMMON_STANDALONE_WORDS:
         return False
     combined = w1 + w2
     return any(combined.endswith(s) for s in COMMON_WORD_SUFFIXES)
@@ -158,6 +697,68 @@ def _vocabulary_gated_join(text: str) -> str:
 
         result_lines.append(modified)
     return "\n".join(result_lines)
+
+
+def _normalize_single_symbol_lines(text: str) -> str:
+    """Merge stranded single-symbol lines back into their formula line.
+
+    Lines of length <= 2 that contain only a single symbol (e.g. "n", "k", "p",
+    "q") are typically PDF extraction artifacts where a symbol got stranded on
+    its own line.  Merge such a line into the previous non-empty line if that
+    line ends with a math symbol or Greek letter; otherwise drop it.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    for ln in lines:
+        s = ln.strip()
+        if len(s) <= 2 and s and all(not ch.isalnum() or ch.isalpha() for ch in s):
+            # Single-symbol or very short line
+            if out and out[-1].strip():
+                # Merge into previous line
+                out[-1] = out[-1].rstrip() + " " + s
+            # else: drop it (no previous line to merge into)
+        else:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _segment_squashed_prose(text: str) -> str:
+    """Segment long lowercase runs that look like squashed prose.
+
+    PDF extraction sometimes drops spaces, producing runs like
+    ``Thesimplestquadraturethatapproximates``.  Apply maximum matching
+    against a small dictionary to reinsert spaces.  Only applied to runs of
+    26+ lowercase letters; math formulas and mixed-case text are untouched.
+    """
+
+    def _segment_run(run: str) -> str:
+        # Maximum matching word segmentation
+        result: list[str] = []
+        i = 0
+        while i < len(run):
+            # Try longest match first
+            matched = False
+            for j in range(min(i + 30, len(run)), i + 2, -1):
+                word = run[i:j]
+                if word in _SEGMENT_DICT:
+                    result.append(word)
+                    i = j
+                    matched = True
+                    break
+            if not matched:
+                # No dictionary match; take one character and move on
+                result.append(run[i])
+                i += 1
+        return " ".join(result)
+
+    # Only process runs of 26+ lowercase letters
+    def _replace(m: re.Match) -> str:
+        run = m.group(0)
+        if len(run) >= 26 and run.islower() and run.isalpha():
+            return _segment_run(run)
+        return run
+
+    return re.sub(r"[a-z]{26,}", _replace, text)
 
 
 def _nfkc(text: str) -> str:
@@ -455,10 +1056,11 @@ def _extract_pdfminer(data: bytes) -> str:
     return pdfminer_extract(io.BytesIO(data))
 
 
-def select_best_extractor(data: bytes) -> tuple[str, str]:
+def select_best_extractor(data: bytes) -> tuple[str, str, float, dict[str, float]]:
     """Select best extractor for a PDF document.
 
-    Returns (extractor_name, extracted_text).
+    Returns (extractor_name, extracted_text, best_score, all_scores).
+    ``all_scores`` maps extractor name -> quality score (lower is better).
     """
     extractors = {
         "pypdf default": _extract_pypdf_default,
@@ -470,6 +1072,7 @@ def select_best_extractor(data: bytes) -> tuple[str, str]:
     best_score = float("inf")
     best_name = "pypdf default"
     best_text = ""
+    all_scores: dict[str, float] = {}
 
     for name, extractor in extractors.items():
         try:
@@ -477,6 +1080,7 @@ def select_best_extractor(data: bytes) -> tuple[str, str]:
             if not text or not text.strip():
                 continue
             score = _score_extraction(text)
+            all_scores[name] = score
             if score < best_score:
                 best_score = score
                 best_name = name
@@ -484,12 +1088,21 @@ def select_best_extractor(data: bytes) -> tuple[str, str]:
         except Exception:
             continue
 
-    return best_name, best_text
+    return best_name, best_text, best_score, all_scores
 
 
 def extract_pdf(data: bytes) -> Extracted:
     # Use best extractor for the full document
-    extractor_name, extracted_text = select_best_extractor(data)
+    extractor_name, extracted_text, best_score, all_scores = select_best_extractor(data)
+
+    # Count actual pages from the raw PDF
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        actual_pages = len(reader.pages)
+    except Exception:
+        actual_pages = 1
 
     pages_text = [extracted_text]
 
@@ -542,18 +1155,36 @@ def extract_pdf(data: bytes) -> Extracted:
     # ---- NEW cleaning steps ----
     # 1. NFC + ligature map (preserves math symbols)
     text = _nfkc(text)
-    # 2. Split CamelCase identifiers (e.g. SimpleGenericMonteCarloClass)
+    # 2. Normalize stranded single-symbol lines (e.g. "n", "k" on their own line)
+    text = _normalize_single_symbol_lines(text)
+    # 3. Segment squashed prose runs (e.g. "Thesimplestquadraturethatapproximates")
+    text = _segment_squashed_prose(text)
+    # 4. Split CamelCase identifiers (e.g. SimpleGenericMonteCarloClass)
     text = _split_camel_case(text)
-    # 3. Vocabulary-gated join of words incorrectly split by a space
+    # 5. Vocabulary-gated join of words incorrectly split by a space
     text = _vocabulary_gated_join(text)
-    # 4. Dedupe repeated paragraphs inside a chunk
+    # 6. Dedupe repeated paragraphs inside a chunk
     text = _dedupe_repeated_paragraphs(text)
     # 4. Exclude chunks that are >60% math symbols/digits as kind=formula_dump
     if _formula_dump_ratio(text) > 0.6:
-        return Extracted(text=text, pages=1, content_type="pdf", extractor=extractor_name)
+        return Extracted(
+            text=text,
+            pages=actual_pages,
+            content_type="pdf",
+            extractor=extractor_name,
+            quality_score=best_score,
+            all_scores=all_scores,
+        )
 
     text = _collapse_whitespace(text)
-    return Extracted(text=text, pages=1, content_type="pdf", extractor=extractor_name)
+    return Extracted(
+        text=text,
+        pages=actual_pages,
+        content_type="pdf",
+        extractor=extractor_name,
+        quality_score=best_score,
+        all_scores=all_scores,
+    )
 
 
 def pdf_image_profile(data: bytes) -> dict[str, object]:

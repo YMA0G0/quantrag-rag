@@ -17,7 +17,14 @@ from .chunking import (
     make_chunk_id,
 )
 from .extract import extract_html, extract_pdf
-from .fetch import FetchResult, HostRateLimiter, detect_format, fetch, find_all_pdf_links
+from .fetch import (
+    FetchResult,
+    HostRateLimiter,
+    detect_format,
+    fetch,
+    find_all_pdf_links,
+    find_resource_links,
+)
 from .sources import Source, load_manual_sources, select_sources
 
 THIN_PAGE_CHARS = 1500
@@ -30,16 +37,34 @@ class _Doc:
     fmt: str
     used_url: str
     followed_from: str
+    extractor: str = ""
+    quality_score: float = float("inf")
 
 
 def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: str) -> _Doc:
     fmt = detect_format(data)
     if fmt == "pdf":
         extracted = extract_pdf(data)
-        return _Doc(extracted.text, extracted.pages, "pdf", used_url, followed_from)
+        return _Doc(
+            extracted.text,
+            extracted.pages,
+            "pdf",
+            used_url,
+            followed_from,
+            extractor=extracted.extractor,
+            quality_score=extracted.quality_score,
+        )
     if fmt == "html":
         extracted = extract_html(data)
-        return _Doc(extracted.text, extracted.pages, "html", used_url, followed_from)
+        return _Doc(
+            extracted.text,
+            extracted.pages,
+            "html",
+            used_url,
+            followed_from,
+            extractor=extracted.extractor,
+            quality_score=extracted.quality_score,
+        )
     # plain text
     text = data.decode("utf-8", errors="replace")
     return _Doc(text, 1, "text", used_url, followed_from)
@@ -125,6 +150,46 @@ def _get_docs(
                     docs.append(doc)
             return docs, "", None
         else:
+            # Second hop for landing pages: follow same-host "/resources/"
+            # links, then look for PDFs on those resource pages.
+            resource_links = find_resource_links(
+                result.content, result.used_url or result.url, max_links=15
+            )
+            if resource_links:
+                for res_url in resource_links:
+                    nested = fetch(
+                        res_url,
+                        cache_dir=cache_dir,
+                        rate_limiter=limiter,
+                        follow_pdf_hop=False,
+                    )
+                    if not nested.ok or nested.detected_format != "html":
+                        continue
+                    res_pdf_links = find_all_pdf_links(
+                        nested.content, nested.used_url or res_url, max_links=15
+                    )
+                    for pdf_url in res_pdf_links:
+                        pdf_nested = fetch(
+                            pdf_url,
+                            cache_dir=cache_dir,
+                            rate_limiter=limiter,
+                            follow_pdf_hop=False,
+                        )
+                        if not pdf_nested.ok or pdf_nested.detected_format != "pdf":
+                            continue
+                        try:
+                            doc = _doc_from_bytes(
+                                source,
+                                pdf_nested.content,
+                                pdf_nested.used_url or pdf_url,
+                                source.url,  # followed_from = original landing page
+                            )
+                        except Exception:  # noqa: BLE001
+                            continue
+                        docs.append(doc)
+                if docs:
+                    return docs, "", None
+
             # No PDF links: process the HTML page itself
             try:
                 doc = _doc_from_bytes(
@@ -244,12 +309,17 @@ def run_pipeline(
         total_chunk_count = 0
         kind_counts: dict[str, int] = {}
         source_ingested = False
+        source_extractor: str | None = None
+        source_quality_score: float | None = None
 
         for doc_idx, doc in enumerate(docs):
             if rrow is not None:
                 rrow["used_url"] = doc.used_url
                 rrow["followed_from"] = doc.followed_from
                 rrow["detected_format"] = doc.fmt
+                if source_extractor is None:
+                    source_extractor = doc.extractor
+                    source_quality_score = doc.quality_score
 
             # Image-locked slide deck check
             if image_profile and image_profile.get("image_locked"):
@@ -331,6 +401,11 @@ def run_pipeline(
             rrow["chunks"] = str(total_chunk_count)
             rrow["characters"] = str(total_chars)
             rrow["pages"] = str(total_pages)
+            rrow["extractor"] = source_extractor or ""
+            if source_quality_score is not None:
+                rrow["quality_score"] = str(round(source_quality_score, 2))
+            else:
+                rrow["quality_score"] = ""
             for kind_name in ("formula_dump", "toc", "references", "boilerplate"):
                 rrow[f"{kind_name}_chunks"] = str(kind_counts.get(kind_name, 0))
         if source_ingested:
@@ -433,6 +508,8 @@ def _write_reports(report, totals_obj, json_path, csv_path):
         "pages",
         "characters",
         "chunks",
+        "extractor",
+        "quality_score",
         "formula_dump_chunks",
         "toc_chunks",
         "references_chunks",
