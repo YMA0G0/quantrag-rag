@@ -236,9 +236,7 @@ def _looks_like_references(text: str) -> bool:
             return True
         # Also: 2+ lines with DOI/URL (common in reference lists)
         doi_url_lines = sum(
-            1
-            for line in lines
-            if re.search(r"(doi:|https?://)", line, re.IGNORECASE)
+            1 for line in lines if re.search(r"(doi:|https?://)", line, re.IGNORECASE)
         )
         if doi_url_lines >= 2 and doi_url_lines >= len(lines) * 0.4:
             return True
