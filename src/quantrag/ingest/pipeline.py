@@ -334,6 +334,42 @@ def run_pipeline(
                 rrow[f"{kind_name}_chunks"] = str(kind_counts.get(kind_name, 0))
         if source_ingested:
             ingested += 1
+
+    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Per-document cap: no single source may exceed 25% of the corpus.
+    # Deterministic: keep the first `cap` chunks per over-cap source URL.
+    # Iterate until no source exceeds 25% of the current total.
+    # ------------------------------------------------------------------
+    if all_chunks:
+        from collections import Counter as _Counter
+
+        changed = True
+        while changed:
+            total = len(all_chunks)
+            cap = max(1, int(total * 0.25))
+            url_counts = _Counter(r["url"] for r in all_chunks)
+            over_cap_urls = {u for u, c in url_counts.items() if c > cap}
+            if not over_cap_urls:
+                changed = False
+                continue
+            capped_chunks: list[dict] = []
+            url_seen: _Counter = _Counter()
+            for r in all_chunks:
+                u = r["url"]
+                if u in over_cap_urls:
+                    url_seen[u] += 1
+                    if url_seen[u] > cap:
+                        continue
+                capped_chunks.append(r)
+            all_chunks = capped_chunks
+            chunk_token_counts = [count_tokens(r["text"]) for r in all_chunks]
+        # Update report chunk counts for capped sources
+        final_url_counts = _Counter(r["url"] for r in all_chunks)
+        for rrow in report:
+            if rrow.get("url") in final_url_counts:
+                rrow["chunks"] = str(final_url_counts[rrow["url"]])
+
     out_chunks.parent.mkdir(parents=True, exist_ok=True)
     with out_chunks.open("w", encoding="utf-8") as handle:
         for record in all_chunks:
