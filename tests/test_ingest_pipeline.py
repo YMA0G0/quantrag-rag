@@ -81,7 +81,7 @@ def test_manual_html_source_ingested_and_roundtrips(tmp_path):
             {
                 "title": "Manual Notes",
                 "url": "https://ex.com/notes",
-                "category": "Options",
+                "category": "Option Greeks and Implied Volatility",
                 "file": "notes.html",
                 "priority_tier": "1",
             }
@@ -108,7 +108,7 @@ def test_thin_page_skipped(tmp_path):
             {
                 "title": "Thin",
                 "url": "https://ex.com/thin",
-                "category": "Options",
+                "category": "Option Greeks and Implied Volatility",
                 "file": "thin.html",
                 "priority_tier": "1",
             }
@@ -132,7 +132,7 @@ def test_manual_file_missing_reported(tmp_path):
             {
                 "title": "Missing",
                 "url": "https://ex.com/m",
-                "category": "Options",
+                "category": "Black–Scholes and Option Pricing",
                 "file": "nope.pdf",
                 "priority_tier": "1",
             }
@@ -153,7 +153,7 @@ def test_report_totals_have_token_counts(tmp_path):
             {
                 "title": "Big",
                 "url": "https://ex.com/big",
-                "category": "Options",
+                "category": "Computational Finance and Numerical Methods",
                 "file": "big.html",
                 "priority_tier": "1",
             }
@@ -194,7 +194,7 @@ def test_dry_run_does_not_clobber_real_report(tmp_path, monkeypatch):
             {
                 "title": "Dry Run Notes",
                 "url": "https://example.com/notes",
-                "category": "Derivatives",
+                "category": "Financial Derivatives and Exotic Options",
                 "resource_type": "Lecture Notes",
                 "check_status": "LIVE",
                 "http_status": "200",
@@ -525,7 +525,7 @@ def test_report_does_not_collapse_same_url_rows(tmp_path: Path) -> None:
             {
                 "title": "CSV Copy",
                 "url": "https://ex.com/shared",
-                "category": "Derivatives",
+                "category": "Financial Derivatives and Exotic Options",
                 "resource_type": "Research Paper",
                 "check_status": "LIVE",
                 "http_status": "200",
