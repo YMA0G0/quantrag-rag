@@ -31,46 +31,133 @@ _LIGATURE_MAP: dict[str, str] = {
     "\ufb06": "st",  # ﬆ
 }
 
-# True artifacts from corpus analysis: split words that should be joined
-# Each appears >=3 times concatenated in its document, not a stop word, len>2
-_TRUE_ARTIFACTS: frozenset[str] = frozenset(
+# ---------------------------------------------------------------------------
+# Squashed-text fixes: CamelCase splitting + rule-based vocabulary-gated join
+# ---------------------------------------------------------------------------
+
+# Common English suffixes that indicate a word was incorrectly split by a space.
+COMMON_WORD_SUFFIXES = frozenset(
     {
-        "corre sponding",
-        "e au",
-        "ea u",
-        "martin gale",
-        "t Here",
-        "there fore",
-        "vari able",
-        "C IR",
-        "Per ederiy",
-        "We re",
-        "la m",
-        "rh o",
-        "th e",
-        "thes E",
-        "where As",
-        "Short hand",
-        "d ln",
-        "log normal",
+        "ing",
+        "tion",
+        "able",
+        "ible",
+        "ence",
+        "ance",
+        "ment",
+        "ness",
+        "ity",
+        "ive",
+        "ous",
+        "ful",
+        "less",
+        "er",
+        "est",
+        "ed",
+        "ly",
+        "al",
+        "ic",
+        "ary",
+        "ory",
+        "ant",
+        "ent",
+        "ist",
+        "ism",
     }
 )
 
+# Letters that commonly END complete English words. If w1 ends with one of
+# these, w1 is likely a complete word (not a fragment awaiting w2).
+# Vowels are deliberately excluded: word fragments like "vari" (variable)
+# and "corre" (corresponding) end with vowels. 'e' and 'y' are also excluded
+# because they end many word fragments (lik→like, happ→happy).
+COMMON_WORD_END_LETTERS = frozenset("d t s n r l")
 
-def _vocabulary_gated_join(text: str) -> str:
-    """Join known split artifacts that appear concatenated >=3 times in the document.
+
+def _split_camel_case(text: str) -> str:
+    """Split CamelCase identifiers into separate words.
+
+    ``SimpleGenericMonteCarloClass`` -> ``Simple Generic Monte Carlo Class``.
+    Preserves newlines; never touches tokens of length <= 2.
+    """
+    # Lowercase -> Uppercase boundary:  lowerUpper  ->  lower Upper
+    result = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    # Acronym -> Word boundary:  URLParser  ->  URL Parser
+    result = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1 \2", result)
+    return result
+
+
+def _is_likely_split_word(w1: str, w2: str) -> bool:
+    """Heuristic: w1 + w2 looks like a single word incorrectly split by a space.
 
     Rules:
-    - Only join known artifacts from corpus analysis
-    - Never join tokens of length <= 2
-    - Preserve newlines and paragraph structure
-    - Only join artifacts verified to have >=3 concatenated occurrences in doc
+    - w1 must be 3-6 letters (short fragment more likely than complete word)
+    - w2 must be 3+ letters
+    - w1 must NOT end with a common word-final letter
+    - w1 + w2 must end with a common English suffix
     """
-    result = text
-    for artifact in _TRUE_ARTIFACTS:
-        if artifact in result:
-            result = result.replace(artifact, artifact.replace(" ", ""))
-    return result
+    if len(w1) < 3 or len(w1) > 6:
+        return False
+    if len(w2) < 3:
+        return False
+    if w1[-1].lower() in COMMON_WORD_END_LETTERS:
+        return False
+    combined = w1 + w2
+    return any(combined.endswith(s) for s in COMMON_WORD_SUFFIXES)
+
+
+def _vocabulary_gated_join(text: str) -> str:
+    """Join words incorrectly split by a space during PDF extraction.
+
+    Rule-based replacement for the old hard-coded ``_TRUE_ARTIFACTS`` list.
+    Operates line by line so newlines are always preserved.
+
+    Rules:
+    - Never join tokens of length <= 2
+    - Never touch the articles "a" or "I"
+    - Preserve newlines (process each line independently)
+    - Only join when w1 ends with an uncommon word-final letter AND
+      w1 + w2 ends with a common English suffix
+    """
+    result_lines: list[str] = []
+    for line in text.split("\n"):
+        # Find all word tokens with their positions
+        tokens: list[tuple[int, int, str]] = []
+        for m in re.finditer(r"[A-Za-z]{3,}", line):
+            tokens.append((m.start(), m.end(), m.group()))
+
+        modified = line
+        offset = 0  # tracks how much the line length has changed
+        i = 0
+        while i < len(tokens) - 1:
+            _, _, w1 = tokens[i]
+            _, _, w2 = tokens[i + 1]
+
+            if (
+                w1.lower() not in {"a", "i"}
+                and w2.lower() not in {"a", "i"}
+                and _is_likely_split_word(w1, w2)
+            ):
+                # Rebuild the search string from original positions (adjusted by offset)
+                start = tokens[i][0] + offset
+                end = tokens[i + 1][1] + offset
+                # The space between w1 and w2 in the current modified string
+                between = modified[start:end]
+                # Match "w1<sep>w2" within the span [start, end)
+                m_space = re.match(re.escape(w1) + r"(\s+)" + re.escape(w2), between)
+                if m_space:
+                    sep = m_space.group(1)
+                    modified = modified[:start] + w1 + w2 + modified[end:]
+                    # Adjust offset: removed len(sep) chars
+                    offset -= len(sep)
+                    i += 2  # skip the joined word
+                else:
+                    i += 1
+            else:
+                i += 1
+
+        result_lines.append(modified)
+    return "\n".join(result_lines)
 
 
 def _nfkc(text: str) -> str:
@@ -455,9 +542,11 @@ def extract_pdf(data: bytes) -> Extracted:
     # ---- NEW cleaning steps ----
     # 1. NFC + ligature map (preserves math symbols)
     text = _nfkc(text)
-    # 2. Vocabulary-gated join of verified split artifacts
+    # 2. Split CamelCase identifiers (e.g. SimpleGenericMonteCarloClass)
+    text = _split_camel_case(text)
+    # 3. Vocabulary-gated join of words incorrectly split by a space
     text = _vocabulary_gated_join(text)
-    # 3. Dedupe repeated paragraphs inside a chunk
+    # 4. Dedupe repeated paragraphs inside a chunk
     text = _dedupe_repeated_paragraphs(text)
     # 4. Exclude chunks that are >60% math symbols/digits as kind=formula_dump
     if _formula_dump_ratio(text) > 0.6:
