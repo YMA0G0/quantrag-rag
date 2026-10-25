@@ -12,7 +12,6 @@ from pathlib import Path
 from .chunking import (
     MAX_TOKENS_HARD,
     TARGET_TOKENS,
-    add_context_header,
     chunk_text,
     count_tokens,
     make_chunk_id,
@@ -46,29 +45,41 @@ def _doc_from_bytes(source: Source, data: bytes, used_url: str, followed_from: s
     return _Doc(text, 1, "text", used_url, followed_from)
 
 
-def _get_doc(source: Source, cache_dir: Path, limiter: HostRateLimiter) -> tuple[_Doc | None, str]:
-    """Return (doc, error_reason)."""
+def _get_doc(
+    source: Source, cache_dir: Path, limiter: HostRateLimiter
+) -> tuple[_Doc | None, str, dict[str, object] | None]:
+    """Return (doc, error_reason, image_profile).
+
+    ``image_profile`` is only populated for manual PDFs; it carries the
+    per-page text/image stats used to flag image-locked decks (``needs_ocr``).
+    """
     if source.manual_file:
         try:
             data = Path(source.manual_file).read_bytes()
         except OSError as exc:
-            return None, f"manual_read_error: {type(exc).__name__}"
+            return None, f"manual_read_error: {type(exc).__name__}", None
         try:
-            return _doc_from_bytes(source, data, source.url, ""), ""
+            doc = _doc_from_bytes(source, data, source.url, "")
         except Exception as exc:  # noqa: BLE001
-            return None, f"extract_error: {type(exc).__name__}"
+            return None, f"extract_error: {type(exc).__name__}", None
+        profile: dict[str, object] | None = None
+        if Path(source.manual_file).suffix.lower() == ".pdf":
+            from .extract import pdf_image_profile
+
+            profile = pdf_image_profile(data)
+        return doc, "", profile
 
     result: FetchResult = fetch(source.url, cache_dir=cache_dir, rate_limiter=limiter)
     if not result.ok:
-        return None, result.error
+        return None, result.error, None
     try:
         doc = _doc_from_bytes(
             source, result.content, result.used_url or result.url, result.followed_from
         )
     except Exception as exc:  # noqa: BLE001
-        return None, f"extract_error: {type(exc).__name__}"
+        return None, f"extract_error: {type(exc).__name__}", None
     doc.pages = doc.pages
-    return doc, ""
+    return doc, "", None
 
 
 def run_pipeline(
@@ -106,7 +117,10 @@ def run_pipeline(
         selected.extend(manual_selected)
         report.extend(manual_report)
 
-    report_by_url = {r["url"]: r for r in report}
+    # Key by (url, origin) so two sources that share a URL but come from
+    # different inputs (e.g. a CSV row and a manual row) never collapse onto a
+    # single report row.
+    report_by_url = {(r["url"], r["origin"]): r for r in report}
 
     if dry_run:
         _write_reports(report, {}, out_report_json, out_report_csv)
@@ -132,8 +146,8 @@ def run_pipeline(
     skipped = sum(1 for r in report if r["status"] == "skipped")
 
     for source in selected:
-        rrow = report_by_url.get(source.url)
-        doc, err = _get_doc(source, cache_dir, limiter)
+        rrow = report_by_url.get((source.url, source.origin))
+        doc, err, image_profile = _get_doc(source, cache_dir, limiter)
 
         if doc is None:
             # Distinguish fetch failures from extraction failures.
@@ -156,6 +170,18 @@ def run_pipeline(
             rrow["followed_from"] = doc.followed_from
             rrow["detected_format"] = doc.fmt
 
+        # Image-locked slide deck: formulas/charts live in images that no
+        # extractor (without OCR) can recover. Mark ``needs_ocr`` and exclude
+        # from the corpus rather than shipping a partial chunk set.
+        if image_profile and image_profile.get("image_locked"):
+            skipped += 1
+            if rrow is not None:
+                rrow["status"] = "skipped"
+                rrow["reason"] = "needs_ocr"
+                rrow["pages"] = str(image_profile.get("pages", ""))
+                rrow["characters"] = str(image_profile.get("total_chars", ""))
+            continue
+
         if len(doc.text.strip()) < 500:
             skipped += 1
             if rrow is not None:
@@ -175,8 +201,13 @@ def run_pipeline(
                 rrow["pages"] = str(doc.pages)
             continue
 
+        # Strip document title from extracted body if present at start.
+        body = doc.text
+        if body.startswith(source.title):
+            body = body[len(source.title) :].lstrip("\n ")
+
         drafts = chunk_text(
-            doc.text,
+            body,
             title=source.title,
             url=source.url,
             target_tokens=target_tokens,
@@ -202,17 +233,18 @@ def run_pipeline(
                 continue
             seen_chunk_hashes.add(chash)
             cid = make_chunk_id(source.url, idx)
-            embedded_text = add_context_header(draft.text, source.title, draft.section)
+            # Store body-only text in JSONL; header added at index time
             record = {
                 "id": cid,
-                "text": embedded_text,
+                "text": draft.text,
                 "title": source.title,
                 "url": source.url,
                 "category": source.category,
+                "section": draft.section,
                 "kind": draft.kind,
             }
             all_chunks.append(record)
-            chunk_token_counts.append(count_tokens(embedded_text))
+            chunk_token_counts.append(count_tokens(draft.text))
             chunk_count += 1
             chunk_drafts.append(draft)
 

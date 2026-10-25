@@ -372,6 +372,7 @@ def load_manual_sources(
         return [], []
     selected: list[Source] = []
     report: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
     for raw in load_csv(path):
         title = _row_get(raw, "title")
         url = _row_get(raw, "url")
@@ -398,6 +399,27 @@ def load_manual_sources(
                 }
             )
             continue
+        # Fail fast on duplicate manual rows sharing a normalised URL: keep the
+        # first occurrence and mark later ones ``duplicate_url`` so the caller
+        # never ingests the same source twice.
+        norm_url = normalize_url(url) or url.lower()
+        if norm_url in seen_urls:
+            report.append(
+                {
+                    "url": url,
+                    "title": title,
+                    "origin": path.name,
+                    "status": "skipped",
+                    "reason": "duplicate_url",
+                    "http_status": "",
+                    "pages": "",
+                    "characters": "",
+                    "chunks": "",
+                    "used_url": "",
+                }
+            )
+            continue
+        seen_urls.add(norm_url)
         suffix = file_path.suffix.lower()
         ctype = "pdf" if suffix == ".pdf" else "html_docs"
         src = Source(

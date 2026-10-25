@@ -12,6 +12,7 @@ env/
 *.zip
 new*.zip
 quantrag_*.zip
+pdfs/
 
 # --- Python caches / build artefacts ---
 __pycache__/
