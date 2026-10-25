@@ -212,7 +212,19 @@ def _decide(
         return False, "needs_manual_review"
     marketing = _marketing_reason(row)
     if marketing:
-        return False, marketing
+        # tier<=2 allow-listed landing pages are fetched so their same-host
+        # PDF links can be followed (cap 15, robots respected, rate limited).
+        if profile == "core":
+            try:
+                tier = int(row["priority_tier"])
+            except (ValueError, TypeError):
+                tier = 1
+            if tier <= CORE_MAX_TIER and row["category"] in CORE_CATEGORIES:
+                pass  # allow tier<=2 allow-listed landing pages through
+            else:
+                return False, marketing
+        else:
+            return False, marketing
     if profile == "core" and row["category"] not in CORE_CATEGORIES:
         # Strict category allow-list: tier only ORDERS sources, it never
         # admits a source whose category is off-list.
