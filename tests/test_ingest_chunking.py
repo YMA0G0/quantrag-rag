@@ -54,3 +54,59 @@ def test_dedup_within_document():
     drafts = chunking.chunk_text(text, title="T", url="http://x", max_tokens=900)
     norms = [" ".join(d.text.split()) for d in drafts]
     assert len(norms) == len(set(norms))
+
+
+# ---------------------------------------------------------------------------
+# Atomic display math, formula_block, and exercise classification
+# ---------------------------------------------------------------------------
+def test_display_math_is_not_split_between_chunks():
+    formula = "$$\n\\sum_{i=1}^{100} x_i + \\frac{\\mu}{\\sigma} = \\int_0^T f(t) dt\n$$"
+    prose = " ".join(["Long prose sentence about the Euler scheme."] * 80)
+    text = prose + "\n\n" + formula + "\n\n" + prose
+    drafts = chunking.chunk_text(text, title="T", url="http://x", target_tokens=120, max_tokens=900)
+    joined = "\n".join(d.text for d in drafts)
+    assert formula in joined
+    assert any(d.kind == "formula_block" for d in drafts)
+
+
+def test_formula_block_keeps_balanced_display_delimiters_when_oversized():
+    rows = ["\\sum_{i=1}^{100} x_i + \\frac{\\mu}{\\sigma} \\\\" for _ in range(80)]
+    formula = "$$\n\\begin{eqnarray}\n" + "\n".join(rows) + "\n\\end{eqnarray}\n$$"
+    assert chunking.count_tokens(formula) > 900
+    drafts = chunking.chunk_text(formula, title="T", url="http://x", max_tokens=900)
+    assert len(drafts) >= 2
+    for draft in drafts:
+        assert draft.kind == "formula_block"
+        assert chunking.count_tokens(draft.text) <= 900
+        assert draft.text.strip().startswith("$$")
+        assert draft.text.strip().endswith("$$")
+        assert "\\begin{eqnarray}" in draft.text
+        assert "\\end{eqnarray}" in draft.text
+
+
+def test_math_fence_is_atomic_formula_block():
+    formula = "```math\n" + "\\sum_{i=1}^{100} x_i = \\frac{\\mu}{\\sigma}\n" + "```"
+    drafts = chunking.chunk_text(
+        "Intro.\n\n" + formula + "\n\nOutro.", title="T", url="http://x", target_tokens=10
+    )
+    assert any(d.kind == "formula_block" and formula in d.text for d in drafts)
+
+
+def test_exercise_section_gets_exercises_kind():
+    text = (
+        "## Exercises\n\n"
+        "Exercise 1. Show that the Euler scheme converges for "
+        + ("a Lipschitz drift and diffusion coefficient. " * 8)
+        + "\n\n## Theory\n\n"
+        + ("The Euler scheme is a stochastic Taylor method. " * 8)
+    )
+    drafts = chunking.chunk_text(text, title="T", url="http://x", target_tokens=100)
+    assert any(d.kind == "exercises" for d in drafts)
+    assert any(d.kind == "prose" for d in drafts)
+    assert any(d.section == "Exercises" for d in drafts if d.kind == "exercises")
+
+
+def test_token_count_includes_latex_markup():
+    plain = "frac mu sigma"
+    latex = r"$\frac{\mu}{\sigma}$"
+    assert chunking.count_tokens(latex) > chunking.count_tokens(plain)

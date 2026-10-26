@@ -17,7 +17,14 @@ from .chunking import (
     count_tokens,
     make_chunk_id,
 )
-from .extract import extract_html, extract_pdf
+from .extract import (
+    ArxivSourceUnavailable,
+    PandocNotFoundError,
+    arxiv_id_from_url,
+    extract_arxiv_source,
+    extract_html,
+    extract_pdf,
+)
 from .fetch import (
     FetchResult,
     HostRateLimiter,
@@ -41,6 +48,7 @@ class _Doc:
     extractor: str = ""
     quality_score: float = float("inf")
     category: str = ""
+    source_format: str = ""
 
 
 def _doc_from_bytes(
@@ -58,6 +66,7 @@ def _doc_from_bytes(
             extractor=extracted.extractor,
             quality_score=extracted.quality_score,
             category=category or source.category,
+            source_format=extracted.source_format,
         )
     if fmt == "html":
         extracted = extract_html(data)
@@ -70,10 +79,49 @@ def _doc_from_bytes(
             extractor=extracted.extractor,
             quality_score=extracted.quality_score,
             category=category or source.category,
+            source_format=extracted.source_format,
         )
     # plain text
     text = data.decode("utf-8", errors="replace")
-    return _Doc(text, 1, "text", used_url, followed_from, category=category or source.category)
+    return _Doc(
+        text,
+        1,
+        "text",
+        used_url,
+        followed_from,
+        category=category or source.category,
+        source_format="text",
+    )
+
+
+def _try_arxiv_source(source: Source, cache_dir: Path) -> tuple[_Doc | None, str]:
+    """Try the LaTeX e-print route; return (doc, error_reason)."""
+    arxiv_id = arxiv_id_from_url(source.url)
+    if not arxiv_id:
+        return None, ""
+    try:
+        extracted = extract_arxiv_source(source.url, cache_dir=cache_dir)
+    except PandocNotFoundError as exc:
+        return None, str(exc)
+    except ArxivSourceUnavailable as exc:
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001 - fall back to PDF/HTML
+        return None, f"{type(exc).__name__}: {exc}"
+    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+    return (
+        _Doc(
+            extracted.text,
+            0,
+            "latex",
+            pdf_url,
+            "",
+            extractor=extracted.extractor,
+            quality_score=extracted.quality_score,
+            category=source.category,
+            source_format=extracted.source_format,
+        ),
+        "",
+    )
 
 
 def _get_docs(
@@ -124,6 +172,13 @@ def _get_docs(
     )
     if not result.ok:
         return None, result.error, None
+
+    # arXiv LaTeX route: one e-print request per paper, cached in data/raw.
+    # If the e-print is a PDF (no LaTeX) or pandoc is unavailable, fall back
+    # to the normal PDF/HTML extraction below.
+    arxiv_doc, _arxiv_error = _try_arxiv_source(source, cache_dir)
+    if arxiv_doc is not None:
+        return [arxiv_doc], "", None
 
     fmt = result.detected_format
     docs: list[_Doc] = []
@@ -368,6 +423,7 @@ def run_pipeline(
         source_ingested = False
         source_extractor: str | None = None
         source_quality_score: float | None = None
+        source_format: str | None = None
 
         for doc_idx, doc in enumerate(docs):
             if rrow is not None:
@@ -377,6 +433,7 @@ def run_pipeline(
                 if source_extractor is None:
                     source_extractor = doc.extractor
                     source_quality_score = doc.quality_score
+                    source_format = doc.source_format
 
             # Image-locked slide deck check
             if image_profile and image_profile.get("image_locked"):
@@ -415,10 +472,12 @@ def run_pipeline(
             if body.startswith(source.title):
                 body = body[len(source.title) :].lstrip("\n ")
 
+            record_url = doc.used_url if doc.source_format == "arxiv_latex" else source.url
+
             drafts = chunk_text(
                 body,
                 title=source.title,
-                url=source.url,
+                url=record_url,
                 target_tokens=target_tokens,
                 max_tokens=max_tokens,
                 overlap_ratio=overlap_ratio,
@@ -427,24 +486,25 @@ def run_pipeline(
 
             for idx, draft in enumerate(drafts):
                 kind_counts[draft.kind] = kind_counts.get(draft.kind, 0) + 1
-                if draft.kind != "prose":
+                if draft.kind not in {"prose", "formula_block", "exercises"}:
                     chunk_drafts.append(draft)
                     continue
-                norm = " ".join(draft.text.split()).lower()
+                norm = f"{draft.kind}: " + " ".join(draft.text.split()).lower()
                 chash = hashlib.sha1(norm.encode()).hexdigest()
                 if chash in seen_chunk_hashes:
                     continue
                 seen_chunk_hashes.add(chash)
-                cid = make_chunk_id(source.url, doc_idx * 10000 + idx)
+                cid = make_chunk_id(record_url, doc_idx * 10000 + idx)
                 # Store body-only text in JSONL; header added at index time
                 record = {
                     "id": cid,
                     "text": draft.text,
                     "title": source.title,
-                    "url": source.url,
+                    "url": record_url,
                     "category": source.category,
                     "section": draft.section,
                     "kind": draft.kind,
+                    "source_format": doc.source_format,
                 }
                 all_chunks.append(record)
                 chunk_token_counts.append(count_tokens(draft.text))
@@ -459,11 +519,19 @@ def run_pipeline(
             rrow["characters"] = str(total_chars)
             rrow["pages"] = str(total_pages)
             rrow["extractor"] = source_extractor or ""
+            rrow["source_format"] = source_format or ""
             if source_quality_score is not None:
                 rrow["quality_score"] = str(round(source_quality_score, 2))
             else:
                 rrow["quality_score"] = ""
-            for kind_name in ("formula_dump", "toc", "references", "boilerplate"):
+            for kind_name in (
+                "formula_dump",
+                "toc",
+                "references",
+                "boilerplate",
+                "formula_block",
+                "exercises",
+            ):
                 rrow[f"{kind_name}_chunks"] = str(kind_counts.get(kind_name, 0))
         if source_ingested:
             ingested += 1
@@ -532,6 +600,8 @@ def run_pipeline(
         "toc_skipped": sum(1 for d in chunk_drafts if d.kind == "toc"),
         "references_skipped": sum(1 for d in chunk_drafts if d.kind == "references"),
         "boilerplate_skipped": sum(1 for d in chunk_drafts if d.kind == "boilerplate"),
+        "formula_block_chunks": sum(1 for d in chunk_drafts if d.kind == "formula_block"),
+        "exercises_chunks": sum(1 for d in chunk_drafts if d.kind == "exercises"),
         "total_chunks": len(all_chunks),
         "dropped_per_doc": dropped_per_doc,
         "dropped_sections": dropped_sections,
@@ -561,6 +631,7 @@ def _write_reports(report, totals_obj, json_path, csv_path):
         "status",
         "reason",
         "detected_format",
+        "source_format",
         "http_status",
         "pages",
         "characters",
@@ -568,6 +639,8 @@ def _write_reports(report, totals_obj, json_path, csv_path):
         "extractor",
         "quality_score",
         "formula_dump_chunks",
+        "formula_block_chunks",
+        "exercises_chunks",
         "toc_chunks",
         "references_chunks",
         "boilerplate_chunks",

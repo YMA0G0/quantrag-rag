@@ -6,20 +6,27 @@ so the module imports cleanly when only the core runtime is installed.
 
 from __future__ import annotations
 
+import gzip
 import io
 import re
+import shutil
+import subprocess
+import tarfile
+import tempfile
 import unicodedata
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
 class Extracted:
     text: str
     pages: int
-    content_type: str  # 'pdf' or 'html'
+    content_type: str  # 'pdf', 'html' or 'latex'
     extractor: str = ""
     quality_score: float = float("inf")
     all_scores: dict[str, float] | None = None
+    source_format: str = ""  # 'pdf', 'html', 'arxiv_latex', 'arxiv_html'
 
 
 # Ligature map for U+FB00–U+FB06 (per Unicode Standard)
@@ -903,7 +910,7 @@ def extract_html(data: bytes) -> Extracted:
         if extracted and len(extracted.strip()) >= 500:
             text = _collapse_whitespace(extracted)
             # headings: trafilatura already returns plain text; keep as is
-            return Extracted(text=text, pages=1, content_type="html")
+            return Extracted(text=text, pages=1, content_type="html", source_format="html")
     except ImportError:
         pass
     except Exception:
@@ -928,7 +935,358 @@ def extract_html(data: bytes) -> Extracted:
             parts.append(el.get_text(" ", strip=True))
     text = "\n".join(p for p in parts if p.strip())
     text = _collapse_whitespace(text)
-    return Extracted(text=text, pages=1, content_type="html")
+    return Extracted(text=text, pages=1, content_type="html", source_format="html")
+
+
+# ---------------------------------------------------------------------------
+# arXiv LaTeX source route (pandoc external binary)
+# ---------------------------------------------------------------------------
+class PandocNotFoundError(RuntimeError):
+    """Raised when the pandoc binary is required but not installed."""
+
+
+class ArxivSourceUnavailable(RuntimeError):
+    """Raised when an arXiv e-print is not usable LaTeX source."""
+
+
+_ARXIV_ID_RE = re.compile(
+    r"arxiv\.org/(?:abs|pdf|html)/"
+    r"(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)"
+    r"(?:\.pdf)?(?:[?#].*)?$",
+    re.IGNORECASE,
+)
+
+_DISPLAY_MATH_ENVS = frozenset(
+    {
+        "equation",
+        "equation*",
+        "align",
+        "align*",
+        "eqnarray",
+        "eqnarray*",
+        "gather",
+        "gather*",
+        "multline",
+        "multline*",
+        "displaymath",
+        "math",
+        "split",
+        "aligned",
+        "alignedat",
+        "gathered",
+        "cases",
+        "array",
+        "matrix",
+        "bmatrix",
+        "pmatrix",
+        "vmatrix",
+        "Vmatrix",
+        "smallmatrix",
+        "subequations",
+    }
+)
+
+_THEOREM_LABELS = (
+    "Theorem",
+    "Lemma",
+    "Remark",
+    "Proposition",
+    "Corollary",
+    "Definition",
+    "Example",
+    "Fact",
+    "Assumption",
+)
+
+
+def arxiv_id_from_url(url: str) -> str | None:
+    """Return the arXiv identifier from an abs/pdf/html URL, if present."""
+    match = _ARXIV_ID_RE.search(url.strip())
+    return match.group("id") if match else None
+
+
+def _download_arxiv_eprint(arxiv_id: str, cache_dir: Path) -> tuple[bytes, bool]:
+    """Download one e-print, or read it from ``data/raw``.
+
+    Returns ``(bytes, from_cache)``.  At most one HTTP request is made per
+    paper; subsequent calls hit ``data/raw/arxiv_<id>_eprint.bin``.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"arxiv_{arxiv_id}_eprint.bin"
+    if cache_path.exists():
+        return cache_path.read_bytes(), True
+
+    import httpx
+
+    from .fetch import USER_AGENT, HostRateLimiter
+
+    limiter = HostRateLimiter(min_interval=3.0)
+    limiter.wait("arxiv.org")
+    url = f"https://arxiv.org/e-print/{arxiv_id}"
+    with httpx.Client(
+        timeout=60.0,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    ) as client:
+        response = client.get(url)
+    if response.status_code != 200:
+        raise ArxivSourceUnavailable(f"e-print HTTP {response.status_code}")
+    data = response.content
+    if len(data) > 25 * 1024 * 1024:
+        raise ArxivSourceUnavailable("e-print too large")
+    cache_path.write_bytes(data)
+    return data, False
+
+
+def _safe_extract_tex(archive: tarfile.TarFile, root: Path) -> None:
+    """Extract only .tex files from an e-print tar, safely."""
+    for member in archive.getmembers():
+        if not member.isfile() or not member.name.lower().endswith(".tex"):
+            continue
+        name = Path(member.name)
+        if name.is_absolute() or ".." in name.parts:
+            continue
+        target = (root / name).resolve()
+        if not str(target).startswith(str(root.resolve()) + "/"):
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        extracted = archive.extractfile(member)
+        if extracted is not None:
+            target.write_bytes(extracted.read())
+
+
+def _prepare_tex_tree(data: bytes, root: Path) -> Path:
+    """Materialise an e-print and return the relative path to its main .tex."""
+    if data[:5] == b"%PDF-":
+        raise ArxivSourceUnavailable("e-print is a PDF, not LaTeX source")
+    if data[:2] == b"\x1f\x8b":
+        data = gzip.decompress(data)
+
+    if tarfile.is_tarfile(io.BytesIO(data)):
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+            _safe_extract_tex(archive, root)
+    else:
+        (root / "main.tex").write_bytes(data)
+
+    # The source is third-party; only .tex files are extracted above.  Ignore
+    # the BOSSIP_*.py listings because they are code files, not document text.
+    for tex_path in root.rglob("*.tex"):
+        text = tex_path.read_text(encoding="utf-8", errors="replace")
+        text = re.sub(
+            r"(?m)^.*\\(?:lstinputlisting|verbatiminput)(?:\[[^\]]*\])?\{[^}]*\.py\}.*$",
+            "",
+            text,
+        )
+        text = re.sub(r"\\input\{[^}]*\.py\}", "", text)
+        tex_path.write_text(text, encoding="utf-8")
+
+    tex_files = sorted(root.rglob("*.tex"))
+    if not tex_files:
+        raise ArxivSourceUnavailable("e-print contains no .tex files")
+
+    for preferred in ("main.tex", "ms.tex", "paper.tex", "article.tex"):
+        for candidate in tex_files:
+            if candidate.name.lower() == preferred:
+                return candidate.relative_to(root)
+
+    with_document = []
+    for candidate in tex_files:
+        text = candidate.read_text(encoding="utf-8", errors="replace")
+        if "\\documentclass" in text and "\\begin{document}" in text:
+            with_document.append(candidate)
+    chosen = max(with_document or tex_files, key=lambda p: p.stat().st_size)
+    return chosen.relative_to(root)
+
+
+def _pandoc_convert(tex_root: Path, main_tex: Path) -> str:
+    """Run pandoc on a materialised LaTeX tree.  Never adds a Python dependency."""
+    pandoc = shutil.which("pandoc")
+    if not pandoc:
+        raise PandocNotFoundError(
+            "pandoc is required for the arXiv LaTeX route. "
+            "Install it with `pacman -S pandoc-cli` on Arch, then rerun."
+        )
+    command = [
+        pandoc,
+        "--from=latex",
+        "--to=markdown+tex_math_dollars-raw_html-fenced_divs-native_divs",
+        "--wrap=none",
+        "--quiet",
+        str(main_tex),
+    ]
+    result = subprocess.run(
+        command,
+        cwd=tex_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = (result.stderr or "").strip() or "unknown pandoc error"
+        raise ArxivSourceUnavailable(f"pandoc failed: {message}")
+    return result.stdout
+
+
+def _strip_outer_math_environment(block: str) -> str:
+    """Remove the outer equation/align/eqnarray wrapper from a math block."""
+    match = re.match(r"\\begin\{([A-Za-z*]+)\}", block.lstrip())
+    if not match:
+        return block
+    env = match.group(1)
+    if env not in _DISPLAY_MATH_ENVS:
+        return block
+    leading = len(block) - len(block.lstrip())
+    end_pattern = re.compile(r"\\end\{" + re.escape(env) + r"\}\s*$")
+    end = end_pattern.search(block)
+    if not end:
+        return block
+    return block[leading + match.end() : end.start()]
+
+
+def _clean_display_math(match: re.Match) -> str:
+    block = _strip_outer_math_environment(match.group(1).strip())
+    block = re.sub(r"\\label\{[^{}]*\}", "", block)
+    block = re.sub(r"\\(?:notag|nonumber)\b", "", block)
+    block = re.sub(r"\\tag\*?\{[^{}]*\}", "", block)
+    block = re.sub(r"[ \t]+\n", "\n", block)
+    block = re.sub(r"\n{3,}", "\n\n", block)
+    return "$$\n" + block.strip() + "\n$$"
+
+
+def clean_pandoc_markdown(markdown: str) -> str:
+    """Normalise pandoc output for chunking and retrieval.
+
+    - keeps ``$...$`` inline math and ``$$...$$`` display math;
+    - strips theorem numbers that pandoc invents;
+    - drops reference/citation link plumbing while keeping labels;
+    - removes div wrappers but keeps their content;
+    - drops the bibliography remainder and raw LaTeX labels.
+    """
+    text = markdown
+
+    # Div wrappers from older pandoc formats: keep the content.
+    text = re.sub(r"<div[^>]*>", "", text)
+    text = re.sub(r"</div>", "", text)
+    text = re.sub(r"(?m)^\s*:::\s*(?:\{[^}]*\})?\s*$", "", text)
+
+    # Do not run a generic HTML-tag stripper here: formulas contain ``<``
+    # (e.g. ``0<s\\leq t``), which a tag regex would swallow as raw HTML.
+    # Pandoc is already invoked with -raw_html; only the known div wrapper
+    # names above need removing.
+
+    # Normalise display math and strip outer LaTeX environments inside $$.
+    # Anchor on the LaTeX environment: pandoc puts every display block in a
+    # \begin{...} wrapper, so a closing $$ before a prose word cannot be
+    # mistaken for the opening of the next block.
+    text = re.sub(
+        r"\$\$(?=\s*\\begin\{)(.+?)\$\$",
+        _clean_display_math,
+        text,
+        flags=re.S,
+    )
+
+    # Theorem-like labels: keep the name, drop invented/unsafe numbering.
+    labels = "|".join(_THEOREM_LABELS)
+    text = re.sub(
+        rf"\*\*({labels})\s+\d+(?:\.\d+)*\*\*\s*\.?",
+        r"**\1.**",
+        text,
+    )
+    text = re.sub(
+        rf"\b({labels})\s+\d+(?:\.\d+)+\b",
+        r"\1",
+        text,
+    )
+    text = re.sub(rf"\*\*({labels})\*\*", r"**\1.**", text)
+
+    # Citations and reference links: keep prose, drop the numbers/plumbing.
+    text = re.sub(r"\[@[^\]]+\]", "", text)
+    # Pandoc emits equation references as [\[label\]](#label){...}.
+    text = re.sub(
+        r"\[\\\[[^\]\n]{1,100}\\\]\]\(#[^)\n]{1,120}\)(?:"
+        r"\{[^}\n]{0,200}\})?",
+        "",
+        text,
+    )
+    # Numeric/lettered cross-references.  Restrict the label so interval
+    # notation such as $[0,+\infty)$ can never be mistaken for a link.
+    text = re.sub(
+        r"\[[^\]\s$(){}\[\]]{1,80}\]\(#[^)\s]{1,120}\)\{[^}\n]{0,200}\}",
+        "",
+        text,
+    )
+    text = re.sub(
+        r"\[[^\]\s$(){}\[\]]{1,80}\]\(#[^)\s]{1,120}\)",
+        "",
+        text,
+    )
+    text = re.sub(r'\{reference-type="[^"]*"[^}]*\}', "", text)
+    text = re.sub(r"\[([^\]]+)\]\{\.smallcaps\}", r"\1", text)
+
+    # Labels, spacing commands, and heading attributes.
+    text = re.sub(r"\\label\{[^{}]*\}", "", text)
+    text = re.sub(r"\\(?:notag|nonumber)\b", "", text)
+    text = re.sub(r"\{#[^}\n]*\}", "", text)
+    text = re.sub(r"\{[.#][^}\n]*\}", "", text)
+
+    # Empty code listings left after ignoring BOSSIP_*.py.
+    text = re.sub(r"```[^\n]*\n\s*```", "", text)
+
+    # Whitespace tidy. Do not alter the contents of $...$ math here.
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip() + "\n"
+
+
+def extract_arxiv_source(
+    arxiv_url: str,
+    *,
+    cache_dir: str | Path = "data/raw",
+) -> Extracted:
+    """Extract an arXiv paper from its LaTeX e-print via pandoc.
+
+    The returned ``Extracted.text`` is Markdown with ``$...$`` and
+    ``$$...$$`` preserved.  ``source_format`` is ``arxiv_latex``; callers keep
+    the original arXiv PDF URL for citations.
+
+    Raises ``PandocNotFoundError`` if pandoc is absent and
+    ``ArxivSourceUnavailable`` if the e-print is not LaTeX.
+    """
+    arxiv_id = arxiv_id_from_url(arxiv_url)
+    if not arxiv_id:
+        raise ArxivSourceUnavailable("not an arXiv abs/pdf/html URL")
+
+    cache_dir = Path(cache_dir)
+    markdown_cache = cache_dir / f"arxiv_{arxiv_id}_source.md"
+    if markdown_cache.exists():
+        text = markdown_cache.read_text(encoding="utf-8")
+        return Extracted(
+            text=text,
+            pages=0,  # LaTeX source has no page count
+            content_type="latex",
+            extractor="pandoc (arXiv LaTeX)",
+            quality_score=0.0,
+            all_scores={"arxiv_latex": 0.0},
+            source_format="arxiv_latex",
+        )
+
+    data, _from_cache = _download_arxiv_eprint(arxiv_id, cache_dir)
+    with tempfile.TemporaryDirectory(prefix="quantrag-arxiv-") as tmp:
+        root = Path(tmp)
+        main_tex = _prepare_tex_tree(data, root)
+        raw_markdown = _pandoc_convert(root, main_tex)
+    text = clean_pandoc_markdown(raw_markdown)
+    markdown_cache.write_text(text, encoding="utf-8")
+    return Extracted(
+        text=text,
+        pages=0,  # LaTeX source has no page count
+        content_type="latex",
+        extractor="pandoc (arXiv LaTeX)",
+        quality_score=0.0,
+        all_scores={"arxiv_latex": 0.0},
+        source_format="arxiv_latex",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1159,6 +1517,66 @@ def select_best_extractor(data: bytes) -> tuple[str, str, float, dict[str, float
     return best_name, best_text, best_score, all_scores
 
 
+class DoclingUnavailableError(RuntimeError):
+    """Raised when the optional docling extractor is requested but missing."""
+
+
+def extract_pdf_docling(
+    data: bytes,
+    *,
+    page_range: tuple[int, int] | None = None,
+    do_formula_enrichment: bool = True,
+) -> Extracted:
+    """Extract a PDF with docling, optionally with formula enrichment.
+
+    This is intentionally opt-in: docling downloads layout/table/formula
+    models and is much slower than pypdf/pdfplumber.  Model weights remain in
+    the user's cache and are never committed.
+    """
+    try:
+        from docling.datamodel.base_models import DocumentStream, InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise DoclingUnavailableError(
+            "docling is not installed; install the ingest extra "
+            "(`uv sync --extra ingest`) to use it."
+        ) from exc
+
+    options = PdfPipelineOptions()
+    options.do_formula_enrichment = do_formula_enrichment
+    options.do_ocr = False
+    options.do_table_structure = False
+    options.do_code_enrichment = False
+    converter = DocumentConverter(
+        format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
+    )
+    stream = DocumentStream(name="document.pdf", stream=io.BytesIO(data))
+    kwargs: dict[str, object] = {}
+    if page_range is not None:
+        kwargs["page_range"] = page_range
+    result = converter.convert(stream, **kwargs)
+    text = result.document.export_to_markdown()
+    pages = (
+        page_range[1] - page_range[0] + 1
+        if page_range is not None
+        else max(1, len(getattr(result.document, "pages", {}) or {}))
+    )
+    try:
+        from docling import __version__ as docling_version
+    except Exception:  # pragma: no cover - version attribute varies
+        docling_version = "unknown"
+    return Extracted(
+        text=text,
+        pages=pages,
+        content_type="pdf",
+        extractor=f"docling {docling_version} (formula enrichment)",
+        quality_score=0.0,
+        all_scores={"docling": 0.0},
+        source_format="docling",
+    )
+
+
 def extract_pdf(data: bytes) -> Extracted:
     # Use best extractor for the full document
     extractor_name, extracted_text, best_score, all_scores = select_best_extractor(data)
@@ -1242,6 +1660,7 @@ def extract_pdf(data: bytes) -> Extracted:
             extractor=extractor_name,
             quality_score=best_score,
             all_scores=all_scores,
+            source_format="pdf",
         )
 
     text = _collapse_whitespace(text)
@@ -1252,6 +1671,7 @@ def extract_pdf(data: bytes) -> Extracted:
         extractor=extractor_name,
         quality_score=best_score,
         all_scores=all_scores,
+        source_format="pdf",
     )
 
 

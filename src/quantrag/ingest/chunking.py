@@ -122,6 +122,205 @@ def _hard_split(text: str, max_tokens: int) -> list[str]:
     return [p for p in pieces if p.strip()]
 
 
+_MATH_ENVS = frozenset(
+    {
+        "equation",
+        "equation*",
+        "align",
+        "align*",
+        "eqnarray",
+        "eqnarray*",
+        "gather",
+        "gather*",
+        "multline",
+        "multline*",
+        "displaymath",
+        "math",
+        "split",
+        "aligned",
+        "alignedat",
+        "gathered",
+        "cases",
+        "array",
+        "matrix",
+        "bmatrix",
+        "pmatrix",
+        "vmatrix",
+        "Vmatrix",
+        "smallmatrix",
+        "subequations",
+    }
+)
+
+_BEGIN_ENV_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}")
+
+
+def _find_matching_env_end(text: str, start: int, env: str) -> int | None:
+    """Return the end offset of the matching ``\\end{env}``, if present."""
+    pattern = re.compile(r"\\(begin|end)\{" + re.escape(env) + r"\}")
+    depth = 0
+    for match in pattern.finditer(text, start):
+        if match.group(1) == "begin":
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                return match.end()
+    return None
+
+
+def _math_block_spans(text: str) -> list[tuple[int, int]]:
+    """Find display-math blocks that must not be split by prose chunking.
+
+    Handles ``$$...$$``, ``\\[...\\]``, ``\\begin{equation}...\\end{equation}``
+    (including align/eqnarray/cases), and ```` ```math ```` fences.
+    """
+    spans: list[tuple[int, int]] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("$$", i):
+            end = text.find("$$", i + 2)
+            if end == -1:
+                break
+            spans.append((i, end + 2))
+            i = end + 2
+            continue
+
+        if text.startswith("\\[", i):
+            end = text.find("\\]", i + 2)
+            if end == -1:
+                break
+            spans.append((i, end + 2))
+            i = end + 2
+            continue
+
+        at_line_start = i == 0 or text[i - 1] == "\n"
+        if at_line_start and text.startswith("```", i):
+            line_end = text.find("\n", i)
+            if line_end != -1:
+                info = text[i + 3 : line_end].strip().lower()
+                if info in {"math", "{.math}", ".math"} or info.startswith("math"):
+                    fence_end = text.find("\n```", line_end)
+                    if fence_end != -1:
+                        spans.append((i, fence_end + 4))
+                        i = fence_end + 4
+                        continue
+
+        if text.startswith("\\begin{", i):
+            begin = _BEGIN_ENV_RE.match(text, i)
+            if begin and begin.group(1) in _MATH_ENVS:
+                end = _find_matching_env_end(text, i, begin.group(1))
+                if end is not None:
+                    spans.append((i, end))
+                    i = end
+                    continue
+
+        i += 1
+    return spans
+
+
+def _split_atomic_units(text: str) -> list[tuple[str, bool]]:
+    """Split a paragraph into (text, is_display_math) units."""
+    spans = _math_block_spans(text)
+    if not spans:
+        stripped = text.strip()
+        return [(stripped, False)] if stripped else []
+
+    units: list[tuple[str, bool]] = []
+    last = 0
+    for start, end in spans:
+        before = text[last:start].strip()
+        if before:
+            units.append((before, False))
+        units.append((text[start:end].strip(), True))
+        last = end
+    after = text[last:].strip()
+    if after:
+        units.append((after, False))
+    return units
+
+
+def _formula_parts(text: str) -> tuple[str, str, str] | None:
+    """Return (prefix, inner, suffix) for a display formula, if known."""
+    stripped = text.strip()
+    if stripped.startswith("$$") and stripped.endswith("$$") and len(stripped) >= 4:
+        inner = stripped[2:-2]
+        begin = _BEGIN_ENV_RE.match(inner.strip())
+        if begin:
+            env = begin.group(1)
+            env_end = f"\\end{{{env}}}"
+            if inner.strip().endswith(env_end):
+                from_start = begin.end()
+                between = inner.strip()[from_start : -len(env_end)]
+                return (
+                    "$$\n" + f"\\begin{{{env}}}",
+                    between,
+                    env_end + "\n$$",
+                )
+        return "$$", inner, "$$"
+    if stripped.startswith("\\[") and stripped.endswith("\\]") and len(stripped) >= 4:
+        return "\\[", stripped[2:-2], "\\]"
+    if stripped.startswith("```"):
+        first_newline = stripped.find("\n")
+        if first_newline != -1 and stripped.endswith("```"):
+            return stripped[: first_newline + 1], stripped[first_newline + 1 : -3], "```"
+    begin = _BEGIN_ENV_RE.match(stripped)
+    if begin:
+        env = begin.group(1)
+        suffix = f"\\end{{{env}}}"
+        if stripped.endswith(suffix):
+            return (
+                f"\\begin{{{env}}}",
+                stripped[begin.end() : -len(suffix)],
+                suffix,
+            )
+    return None
+
+
+def _split_formula_block(text: str, max_tokens: int) -> list[str]:
+    """Split a display formula at row boundaries, preserving $$ wrappers.
+
+    A formula that cannot be split at ``\\\\`` rows (a single giant row) is a
+    last-resort token-window split; callers still mark the pieces as
+    formula_block, and the limitation is documented.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if count_tokens(text) <= max_tokens:
+        return [text]
+
+    parts = _formula_parts(text)
+    if parts is None:
+        return _token_window(text, max_tokens)
+    prefix, inner, suffix = parts
+
+    rows = re.split(r"(?<=\\\\)\s*\n", inner)
+    pieces: list[str] = []
+    buf: list[str] = []
+    for row in rows:
+        candidate = "\n".join([*buf, row])
+        wrapped = prefix + "\n" + candidate.strip() + "\n" + suffix
+        if count_tokens(wrapped) <= max_tokens:
+            buf.append(row)
+            continue
+        if buf:
+            pieces.append(prefix + "\n" + "\n".join(buf).strip() + "\n" + suffix)
+            buf = []
+        row_wrapped = prefix + "\n" + row.strip() + "\n" + suffix
+        if count_tokens(row_wrapped) <= max_tokens:
+            buf.append(row)
+        else:
+            # A single row larger than the hard cap: no balanced split exists.
+            inner_budget = max(20, max_tokens - count_tokens(prefix + suffix) - 8)
+            for chunk in _token_window(row, inner_budget):
+                pieces.append(prefix + "\n" + chunk.strip() + "\n" + suffix)
+    if buf:
+        pieces.append(prefix + "\n" + "\n".join(buf).strip() + "\n" + suffix)
+    return [p for p in pieces if p.strip()]
+
+
 @dataclass
 class ChunkDraft:
     text: str
@@ -248,8 +447,25 @@ def _looks_like_boilerplate(text: str) -> bool:
     return any(pat.search(text) for pat in _BOILERPLATE_PATTERNS) and len(text.strip()) < 2000
 
 
-def _chunk_filter_kind(text: str) -> str:
-    """Classify a chunk's kind: prose, formula_dump, toc, references, boilerplate."""
+def _looks_like_exercises(text: str, section: str = "") -> bool:
+    """Detect exercise/problem sections, which are kept but not indexed."""
+    if section and re.search(r"\b(exercises?|problems?)\b", section, re.IGNORECASE):
+        return True
+    head = text.lstrip()[:300]
+    return bool(
+        re.match(r"(?i)^(?:exercise|problem)\s+\d", head)
+        or re.match(r"(?i)^\d+(?:\.\d+)*\s+(?:exercise|problem)\b", head)
+    )
+
+
+def _chunk_filter_kind(text: str, section: str = "") -> str:
+    """Classify a chunk's kind.
+
+    Returns prose, exercises, formula_dump, toc, references, or boilerplate.
+    Exercise/problem sections are kept in JSONL but excluded from the index.
+    """
+    if _looks_like_exercises(text, section):
+        return "exercises"
     if _formula_dump_ratio(text) > 0.6:
         return "formula_dump"
     if _looks_like_toc(text):
@@ -301,39 +517,60 @@ def chunk_text(
         raise ValueError("max_tokens must be positive")
 
     drafts: list[ChunkDraft] = []
+
     for heading, body in _sections(text):
         if not body:
             continue
-        blocks = _split_paragraphs(body)
-        buf: list[str] = []
+        units: list[tuple[str, bool]] = []
+        for block in _split_paragraphs(body):
+            units.extend(_split_atomic_units(block))
+
+        overhead = count_tokens(add_context_header("", title, heading))
+        body_budget = max(1, max_tokens - overhead - 10)
+
+        buf: list[tuple[str, bool]] = []
         buf_tokens = 0
-        for block in blocks:
-            bt = count_tokens(block)
-            if bt > target_tokens:
-                if buf:
-                    drafts.append(ChunkDraft("\n\n".join(buf), heading))
-                    buf, buf_tokens = [], 0
-                for piece in _hard_split(block, target_tokens):
+
+        def flush_buffer(current_heading: str = heading) -> None:
+            nonlocal buf, buf_tokens
+            if not buf:
+                return
+            drafts.append(ChunkDraft("\n\n".join(part for part, _ in buf), current_heading))
+            # carry overlap from the tail of the previous chunk
+            carry: list[tuple[str, bool]] = []
+            carry_tokens = 0
+            overlap_budget = int(target_tokens * overlap_ratio)
+            for part, is_math in reversed(buf):
+                pt = count_tokens(part)
+                if carry_tokens + pt <= overlap_budget:
+                    carry.insert(0, (part, is_math))
+                    carry_tokens += pt
+                else:
+                    break
+            buf, buf_tokens = carry, carry_tokens
+
+        for unit, is_math in units:
+            ut = count_tokens(unit)
+            if is_math:
+                # Math blocks are atomic: flush prose buffer, then emit math as its own chunk.
+                flush_buffer()
+                if ut > body_budget:
+                    for piece in _split_formula_block(unit, body_budget):
+                        drafts.append(ChunkDraft(piece, heading, kind="formula_block"))
+                else:
+                    drafts.append(ChunkDraft(unit, heading, kind="formula_block"))
+                continue
+            # Prose unit
+            if ut > target_tokens:
+                flush_buffer()
+                for piece in _hard_split(unit, target_tokens):
                     drafts.append(ChunkDraft(piece, heading))
                 continue
-            if buf and buf_tokens + bt > target_tokens:
-                drafts.append(ChunkDraft("\n\n".join(buf), heading))
-                # carry overlap from the tail of the previous chunk
-                carry: list[str] = []
-                carry_tokens = 0
-                overlap_budget = int(target_tokens * overlap_ratio)
-                for prev in reversed(buf):
-                    pt = count_tokens(prev)
-                    if carry_tokens + pt <= overlap_budget:
-                        carry.insert(0, prev)
-                        carry_tokens += pt
-                    else:
-                        break
-                buf, buf_tokens = carry, carry_tokens
-            buf.append(block)
-            buf_tokens += bt
-        if buf:
-            drafts.append(ChunkDraft("\n\n".join(buf), heading))
+            if buf and buf_tokens + ut > target_tokens:
+                flush_buffer()
+            buf.append((unit, is_math))
+            buf_tokens += ut
+        flush_buffer()
 
     # Safety net: never emit a chunk above the hard cap, counting the context
     # header that will be prepended before embedding.
@@ -344,29 +581,37 @@ def chunk_text(
         budget = max(1, max_tokens - overhead - 10)
         if count_tokens(draft.text) <= budget:
             capped.append(draft)
-        else:
-            for piece in _hard_split(draft.text, budget):
-                # _hard_split can return pieces slightly above budget because
-                # joining sentences with spaces can create new BPE merges that
-                # increase the token count vs the sum of individual counts.
-                # Belt-and-suspenders: split any remaining oversized pieces.
-                if count_tokens(piece) <= budget:
-                    capped.append(ChunkDraft(piece, draft.section))
-                else:
-                    for subpiece in _token_window(piece, budget):
-                        capped.append(ChunkDraft(subpiece, draft.section))
+            continue
+        if draft.kind == "formula_block":
+            for piece in _split_formula_block(draft.text, budget):
+                capped.append(ChunkDraft(piece, draft.section, kind="formula_block"))
+            continue
+        for piece in _hard_split(draft.text, budget):
+            # _hard_split can return pieces slightly above budget because
+            # joining sentences with spaces can create new BPE merges that
+            # increase the token count vs the sum of individual counts.
+            # Belt-and-suspenders: split any remaining oversized pieces.
+            if count_tokens(piece) <= budget:
+                capped.append(ChunkDraft(piece, draft.section))
+            else:
+                for subpiece in _token_window(piece, budget):
+                    capped.append(ChunkDraft(subpiece, draft.section))
     drafts = capped
 
-    if len(drafts) > 1:
-        drafts = [d for d in drafts if len(d.text.strip()) >= min_chars]
-
-    # Classify each chunk: formula_dump, toc, references, boilerplate, or prose
+    # Classify each chunk: formula_dump, toc, references, boilerplate, prose,
+    # or exercises.  Exercises and oversized formula blocks are kept in the
+    # JSONL output but excluded from the default retrieval index.
     kept: list[ChunkDraft] = []
-    kind_counts: dict[str, int] = {}
     for draft in drafts:
-        draft.kind = _chunk_filter_kind(draft.text)
-        kind_counts[draft.kind] = kind_counts.get(draft.kind, 0) + 1
-        if draft.kind != "prose":
+        if draft.kind != "formula_block":
+            draft.kind = _chunk_filter_kind(draft.text, draft.section)
+        if (
+            len(drafts) > 1
+            and len(draft.text.strip()) < min_chars
+            and draft.kind not in {"formula_block", "exercises"}
+        ):
+            continue
+        if draft.kind not in {"prose", "formula_block", "exercises"}:
             continue
         kept.append(draft)
     drafts = kept

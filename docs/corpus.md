@@ -73,6 +73,15 @@ PDFs are large and licence-unclear, so they are git-ignored except for
 `data/manual/README.md`. Do not redistribute `data/chunks.jsonl` or the
 underlying PDFs without reviewing each source's licence.
 
+### arXiv 2208.05531 licence
+
+The paper arXiv:2208.05531 (Foundations of Monte Carlo methods and stochastic
+simulations, by P. Przybyłowicz) is distributed under the **arXiv.org
+non-exclusive license to distribute** (perpetual, non-exclusive licence to
+distribute the article; submissions cannot be completely removed once
+accepted; arXiv reserves the right to reclassify or reject). Full licence text
+at <https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html>.
+
 ## Lineage
 
 - `b0a5abd` baseline: MCP + retriever + ingest + eval

@@ -31,6 +31,7 @@ ingest = [
     "lxml>=5.0",
     "tiktoken>=0.7",
     "fonttools>=4.50",
+    "docling>=2.0",
 ]
 
 [build-system]
