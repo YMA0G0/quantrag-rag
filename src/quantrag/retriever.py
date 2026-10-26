@@ -174,15 +174,16 @@ class Retriever:
     ) -> int:
         """Embed and store ``chunks`` (in batches); returns how many were added.
 
-        Non-prose chunks (``kind != "prose"``) are skipped by default.  The
-        header (title + section) is prepended to the body text at index time so
-        that both the vector and the stored text include the citation context.
+        By default, indexes ``prose`` and ``formula_block`` chunks (which contain
+        display math).  Other non-prose kinds (``exercises``, ``formula_dump``,
+        ``toc``, ``references``, ``boilerplate``) are skipped unless
+        ``include_non_prose=True``.
         """
         if batch_size <= 0:
             raise RetrievalError("batch_size must be greater than 0.")
         items = list(chunks)
         if not include_non_prose:
-            items = [c for c in items if c.kind == "prose"]
+            items = [c for c in items if c.kind in {"prose", "formula_block"}]
         for start in range(0, len(items), batch_size):
             batch = items[start : start + batch_size]
             texts_with_header = [add_context_header(c.text, c.title, c.section) for c in batch]

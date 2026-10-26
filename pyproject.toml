@@ -31,6 +31,10 @@ ingest = [
     "lxml>=5.0",
     "tiktoken>=0.7",
     "fonttools>=4.50",
+]
+# Heavy PDF extraction with formula enrichment (docling + PyTorch/transformers).
+# Opt-in only; not included in the default ingest extra.
+math-pdf = [
     "docling>=2.0",
 ]
 

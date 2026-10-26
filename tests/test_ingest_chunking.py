@@ -66,7 +66,9 @@ def test_display_math_is_not_split_between_chunks():
     drafts = chunking.chunk_text(text, title="T", url="http://x", target_tokens=120, max_tokens=900)
     joined = "\n".join(d.text for d in drafts)
     assert formula in joined
-    assert any(d.kind == "formula_block" for d in drafts)
+    # Formula stays INSIDE prose chunk (atomic, not split)
+    assert all(d.kind == "prose" for d in drafts)
+    assert any(formula in d.text for d in drafts)
 
 
 def test_formula_block_keeps_balanced_display_delimiters_when_oversized():
@@ -84,12 +86,16 @@ def test_formula_block_keeps_balanced_display_delimiters_when_oversized():
         assert "\\end{eqnarray}" in draft.text
 
 
-def test_math_fence_is_atomic_formula_block():
+def test_math_fence_stays_in_prose():
     formula = "```math\n" + "\\sum_{i=1}^{100} x_i = \\frac{\\mu}{\\sigma}\n" + "```"
+    # With realistic target_tokens, the formula stays inside the prose chunk
     drafts = chunking.chunk_text(
-        "Intro.\n\n" + formula + "\n\nOutro.", title="T", url="http://x", target_tokens=10
+        "Intro.\n\n" + formula + "\n\nOutro.", title="T", url="http://x", target_tokens=600
     )
-    assert any(d.kind == "formula_block" and formula in d.text for d in drafts)
+    # Formula stays INSIDE prose chunk (atomic, not split)
+    assert len(drafts) == 1
+    assert drafts[0].kind == "prose"
+    assert formula in drafts[0].text
 
 
 def test_exercise_section_gets_exercises_kind():

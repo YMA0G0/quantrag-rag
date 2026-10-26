@@ -531,40 +531,64 @@ def chunk_text(
         buf: list[tuple[str, bool]] = []
         buf_tokens = 0
 
-        def flush_buffer(current_heading: str = heading) -> None:
+        def flush_buffer(current_heading: str = heading) -> ChunkDraft | None:
             nonlocal buf, buf_tokens
             if not buf:
-                return
-            drafts.append(ChunkDraft("\n\n".join(part for part, _ in buf), current_heading))
-            # carry overlap from the tail of the previous chunk
-            carry: list[tuple[str, bool]] = []
-            carry_tokens = 0
-            overlap_budget = int(target_tokens * overlap_ratio)
-            for part, is_math in reversed(buf):
-                pt = count_tokens(part)
-                if carry_tokens + pt <= overlap_budget:
-                    carry.insert(0, (part, is_math))
-                    carry_tokens += pt
-                else:
-                    break
-            buf, buf_tokens = carry, carry_tokens
+                return None
+            has_math = any(is_math for _, is_math in buf)
+            draft = ChunkDraft("\n\n".join(part for part, _ in buf), current_heading)
+            drafts.append(draft)
+            # Carry overlap from the tail of the previous chunk, but ONLY for prose.
+            # Math units are atomic and should not carry prose overlap into them.
+            if not has_math:
+                carry: list[tuple[str, bool]] = []
+                carry_tokens = 0
+                overlap_budget = int(target_tokens * overlap_ratio)
+                for part, is_math in reversed(buf):
+                    pt = count_tokens(part)
+                    if carry_tokens + pt <= overlap_budget:
+                        carry.insert(0, (part, is_math))
+                        carry_tokens += pt
+                    else:
+                        break
+                buf, buf_tokens = carry, carry_tokens
+            else:
+                # Math units are atomic - no overlap carry into or out of them
+                buf, buf_tokens = [], 0
+            return draft
 
         for unit, is_math in units:
             ut = count_tokens(unit)
             if is_math:
-                # Math blocks are atomic: flush prose buffer, then emit math as its own chunk.
-                flush_buffer()
+                # Display math is atomic and stays INSIDE the prose chunk.
+                # Only if the math block alone exceeds the body budget, emit it as formula_block.
                 if ut > body_budget:
+                    flush_buffer()
                     for piece in _split_formula_block(unit, body_budget):
                         drafts.append(ChunkDraft(piece, heading, kind="formula_block"))
                 else:
-                    drafts.append(ChunkDraft(unit, heading, kind="formula_block"))
+                    # Math fits in budget - append to buffer like prose (atomic, never split)
+                    if buf and buf_tokens + ut > target_tokens:
+                        flush_buffer()
+                    buf.append((unit, is_math))
+                    buf_tokens += ut
                 continue
             # Prose unit
             if ut > target_tokens:
-                flush_buffer()
-                for piece in _hard_split(unit, target_tokens):
-                    drafts.append(ChunkDraft(piece, heading))
+                if buf:
+                    # Prepend buffer (which may contain math) to the first hard_split piece
+                    pieces = _hard_split(unit, target_tokens)
+                    if pieces:
+                        first_piece = pieces[0] + "\n\n" + "\n\n".join(part for part, _ in buf)
+                        pieces[0] = first_piece
+                    else:
+                        pieces = ["\n\n".join(part for part, _ in buf)]
+                    for piece in pieces:
+                        drafts.append(ChunkDraft(piece, heading))
+                    buf, buf_tokens = [], 0
+                else:
+                    for piece in _hard_split(unit, target_tokens):
+                        drafts.append(ChunkDraft(piece, heading))
                 continue
             if buf and buf_tokens + ut > target_tokens:
                 flush_buffer()
@@ -615,6 +639,34 @@ def chunk_text(
             continue
         kept.append(draft)
     drafts = kept
+
+    # Merge chunks under 150 tokens into their neighbors.
+    # This helps avoid tiny fragments while keeping the hard cap.
+    # Only merge chunks from the SAME section and SAME kind.
+    if len(drafts) > 1:
+        merged: list[ChunkDraft] = []
+        i = 0
+        while i < len(drafts):
+            draft = drafts[i]
+            if (
+                count_tokens(draft.text) < 150
+                and i + 1 < len(drafts)
+                and draft.section == drafts[i + 1].section
+                and draft.kind == drafts[i + 1].kind
+            ):
+                # Merge with next chunk
+                next_draft = drafts[i + 1]
+                merged_text = draft.text + "\n\n" + next_draft.text
+                # Ensure merged doesn't exceed hard cap
+                overhead = count_tokens(add_context_header("", title, draft.section))
+                budget = max(1, max_tokens - overhead - 10)
+                if count_tokens(merged_text) <= budget:
+                    merged.append(ChunkDraft(merged_text, draft.section, draft.kind))
+                    i += 2
+                    continue
+            merged.append(draft)
+            i += 1
+        drafts = merged
 
     seen: set[str] = set()
     unique: list[ChunkDraft] = []

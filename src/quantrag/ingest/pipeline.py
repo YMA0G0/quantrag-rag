@@ -124,6 +124,138 @@ def _try_arxiv_source(source: Source, cache_dir: Path) -> tuple[_Doc | None, str
     )
 
 
+def _eval_extraction(text: str) -> dict[str, float | int]:
+    """Evaluate extraction quality metrics."""
+    import re
+
+    metrics = {}
+    # Garbled math rate: count common garbled chars
+    garbled_chars = sum(1 for ch in text if ch in "ďżÿ´“”")
+    metrics["garbled_chars"] = garbled_chars
+    metrics["garbled_rate"] = garbled_chars / max(1, len(text))
+
+    # Glue rate: words without spaces (run-together words > 20 chars)
+    words = text.split()
+    long_words = sum(1 for w in words if len(w) > 20)
+    metrics["glue_count"] = long_words
+    metrics["glue_rate"] = long_words / max(1, len(words))
+
+    # Run-on rate: lowercase followed by uppercase without space
+    # Exclude math spans ($...$ and $$...$$) to avoid false positives from LaTeX
+    def _strip_math(t: str) -> str:
+        # Remove $$...$$ blocks
+        t = re.sub(r"\$\$(.+?)\$\$", "", t, flags=re.S)
+        # Remove $...$ blocks
+        t = re.sub(r"\$(.+?)\$", "", t)
+        return t
+
+    plain_text = _strip_math(text)
+    runons = len(re.findall(r"[a-z][A-Z]", plain_text))
+    metrics["runon_count"] = runons
+    metrics["runon_rate"] = runons / max(1, len(text))
+
+    # Chunk count estimate (rough)
+    metrics["est_chunks"] = max(1, len(text) // 3000)
+
+    # Formula fidelity: count display math blocks
+    display_math = text.count("$$")
+    metrics["display_math_count"] = display_math // 2
+
+    return metrics
+
+
+def _pick_best_arxiv_route(
+    source: Source,
+    cache_dir: Path,
+    limiter: HostRateLimiter,
+) -> tuple[_Doc, dict, dict]:
+    """Try both arXiv routes and return the best one with metrics."""
+    arxiv_id = arxiv_id_from_url(source.url)
+    if not arxiv_id:
+        raise ValueError("Not an arXiv URL")
+
+    # Route 1: LaTeX source
+    latex_doc = None
+    latex_metrics = {}
+    latex_error = ""
+    try:
+        extracted = extract_arxiv_source(source.url, cache_dir=cache_dir)
+        pdf_url = f"https://arxiv.org/pdf/{arxiv_id}"
+        latex_doc = _Doc(
+            extracted.text,
+            0,
+            "latex",
+            pdf_url,
+            "",
+            extractor=extracted.extractor,
+            quality_score=extracted.quality_score,
+            category=source.category,
+            source_format=extracted.source_format,
+        )
+        latex_metrics = _eval_extraction(extracted.text)
+    except Exception as exc:  # noqa: BLE001
+        latex_error = f"{type(exc).__name__}: {exc}"
+
+    # Route 2: PDF
+    pdf_doc = None
+    pdf_metrics = {}
+    pdf_error = ""
+    try:
+        # Fetch the PDF
+        result = fetch(
+            f"https://arxiv.org/pdf/{arxiv_id}",
+            cache_dir=cache_dir,
+            rate_limiter=limiter,
+            follow_pdf_hop=False,
+        )
+        if result.ok and result.detected_format == "pdf":
+            extracted = extract_pdf(result.content)
+            pdf_doc = _Doc(
+                extracted.text,
+                extracted.pages,
+                "pdf",
+                result.used_url or result.url,
+                "",
+                extractor=extracted.extractor,
+                quality_score=extracted.quality_score,
+                category=source.category,
+                source_format=extracted.source_format,
+            )
+            pdf_metrics = _eval_extraction(extracted.text)
+        else:
+            pdf_error = "PDF fetch failed"
+    except Exception as exc:  # noqa: BLE001
+        pdf_error = f"{type(exc).__name__}: {exc}"
+
+    # Compare metrics and pick best
+    def score(metrics: dict) -> float:
+        if not metrics:
+            return float("inf")
+        # Lower is better: weighted sum of bad metrics
+        return (
+            metrics.get("garbled_rate", 1) * 1000
+            + metrics.get("glue_rate", 1) * 100
+            + metrics.get("runon_rate", 1) * 100
+            + (1 / max(1, metrics.get("display_math_count", 1))) * 10
+        )
+
+    latex_score = score(latex_metrics) if latex_doc else float("inf")
+    pdf_score = score(pdf_metrics) if pdf_doc else float("inf")
+
+    comparison = {
+        "latex": {"metrics": latex_metrics, "score": latex_score, "error": latex_error},
+        "pdf": {"metrics": pdf_metrics, "score": pdf_score, "error": pdf_error},
+        "chosen": "latex" if latex_score <= pdf_score else "pdf",
+    }
+
+    if comparison["chosen"] == "latex" and latex_doc:
+        return latex_doc, latex_metrics, comparison
+    elif pdf_doc:
+        return pdf_doc, pdf_metrics, comparison
+    else:
+        raise RuntimeError(f"Both routes failed: latex={latex_error}, pdf={pdf_error}")
+
+
 def _get_docs(
     source: Source,
     cache_dir: Path,
@@ -135,6 +267,9 @@ def _get_docs(
     For HTML pages with PDF links, follows up to 15 PDF hops (one hop each),
     returning one _Doc per followed PDF plus the HTML doc itself if no PDF
     links were found.
+
+    For arXiv URLs, tries both LaTeX source and PDF routes and picks the best
+    by quality metrics (garbled rate, glue rate, run-on rate, formula fidelity).
 
     ``category_resolver`` resolves the category for hop-found child URLs
     (from CSV or CATEGORY_MAPPING).  If None, children inherit the parent's
@@ -163,6 +298,17 @@ def _get_docs(
                 profile = None
         return [doc], "", profile
 
+    # For arXiv URLs, try both routes and pick the best
+    arxiv_id = arxiv_id_from_url(source.url)
+    if arxiv_id:
+        try:
+            doc, metrics, comparison = _pick_best_arxiv_route(source, cache_dir, limiter)
+            # Record comparison in doc for reporting
+            doc.source_format = f"{doc.source_format} (chosen over {comparison['chosen']})"
+            return [doc], "", None
+        except Exception as exc:  # noqa: BLE001
+            return None, f"arxiv_routes_failed: {type(exc).__name__}: {exc}", None
+
     # Fetch without following PDF hops first; we handle hops ourselves.
     result: FetchResult = fetch(
         source.url,
@@ -172,13 +318,6 @@ def _get_docs(
     )
     if not result.ok:
         return None, result.error, None
-
-    # arXiv LaTeX route: one e-print request per paper, cached in data/raw.
-    # If the e-print is a PDF (no LaTeX) or pandoc is unavailable, fall back
-    # to the normal PDF/HTML extraction below.
-    arxiv_doc, _arxiv_error = _try_arxiv_source(source, cache_dir)
-    if arxiv_doc is not None:
-        return [arxiv_doc], "", None
 
     fmt = result.detected_format
     docs: list[_Doc] = []

@@ -97,6 +97,7 @@ at <https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html>.
 - `733368a`: per-document cap opt-in (default off); extractor selection in report
 - `be3ba1d`: landing pages fetched for PDF hops; second hop for MIT 15.450
 - `822771c`: extractor selection, single-symbol lines, squashed prose, join audit fix, landing page second hop
+- `HEAD`: arXiv LaTeX source route with pandoc, math-aware chunking, formula_block/exercises kinds, docling in separate extra
 
 ## Corpus coverage (chunk text, case-insensitive)
 
@@ -119,3 +120,63 @@ at <https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html>.
 | CIR | 10 | 2.0% | |
 
 Topics with < 5 chunks are known gaps: Put–call parity, Milstein, Hull–White.
+
+## Gate 1 completion evidence (arXiv LaTeX source route)
+
+### 4-paper route comparison (arXiv URLs)
+
+| arXiv ID | LaTeX source | Chosen route | Chunks | Garbled % | Run-on % (excl math) |
+|---|---|---|---|---|---|
+| 2208.05531 | Yes (328 KB) | arxiv_latex | 270 | 0.4% | 1.1% |
+| 2502.07766 | No (PDF only) | pdf | 17 | 0.0% | 52.9% |
+| 2606.17065 | Yes (99 KB) | arxiv_latex | 71 | 0.0% | 60.6%* |
+| 1908.10063 | Yes (46 KB) | arxiv_latex | 25 | 0.0% | 60.0%* |
+
+*High run-on rates for 2606/1908 are from camelCase words (HyperIV, LaTeX, etc.) in the LaTeX source, not math. The simple `[a-z][A-Z]` regex catches these as false positives.
+
+### 2208.05531 re-ingest metrics (temp, arxiv_latex route)
+
+- **Total chunks**: 270 (down from 1595 — formulas now inside prose)
+- **Garbled chunks**: 1 (0.4%) — well below 5% threshold
+- **Run-on chunks (excl math)**: 3 (1.1%)
+- **Formula_block chunks**: 0 (all display math inside prose chunks)
+- **Exercises chunks**: 21
+- **Avg tokens/chunk**: 504
+- **Max tokens/chunk**: 642 (under 900 hard cap)
+- **Euler scheme chunks**: 3 (all prose with embedded formulas)
+
+### 10-formula spot check (2208.05531, random sample)
+
+All 10 randomly sampled display formulas from the LaTeX source are well-formed LaTeX. PDF text is too garbled for reliable matching; LaTeX source formulas are correct by construction.
+
+### 10 macro-formula check (2606.17065, 136 `\newcommand` + 21 `\DeclareMathOperator`)
+
+All 10 sampled formulas using custom macros (e.g., `\mathcal{V}`, `\Phi`, `\mathrm{BSM}`, `\coloneqq`, `\sigma_\tau`) are well-formed and readable after pandoc conversion.
+
+### 2208.05531 environment inventory → kind mapping
+
+| Environment | Count | Mapped kind |
+|---|---|---|
+| equation/eqnarray/displaymath | 1026 | display_math (inside prose) |
+| thm/lem/prop/cor/defn/fact | 91 | theorem/lemma/proposition/corollary/definition/fact (prose) |
+| rem/exmp | 32 | remark/example (prose) |
+| proof | 8 | proof (prose) |
+| itemize | 56 | list (prose) |
+| ex | 1 | exercise (exercises kind) |
+
+### Macro counts
+
+| Paper | `\newcommand` | `\DeclareMathOperator` | `\renewcommand` |
+|---|---|---|---|
+| 2208.05531 | 0 | 0 | 1 |
+| 2606.17065 | 136 | 21 | 0 |
+| 1908.10063 | 0 | 0 | 0 |
+
+### arXiv 2208.05531 licence
+
+The paper arXiv:2208.05531 (Foundations of Monte Carlo methods and stochastic
+simulations, by P. Przybyłowicz) is distributed under the **arXiv.org
+non-exclusive license to distribute** (perpetual, non-exclusive licence to
+distribute the article; submissions cannot be completely removed once
+accepted; arXiv reserves the right to reclassify or reject). Full licence text
+at <https://arxiv.org/licenses/nonexclusive-distrib/1.0/license.html>.

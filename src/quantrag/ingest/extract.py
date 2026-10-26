@@ -1539,8 +1539,8 @@ def extract_pdf_docling(
         from docling.document_converter import DocumentConverter, PdfFormatOption
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise DoclingUnavailableError(
-            "docling is not installed; install the ingest extra "
-            "(`uv sync --extra ingest`) to use it."
+            "docling is not installed; install the math-pdf extra "
+            "(`uv sync --extra math-pdf`) to use it."
         ) from exc
 
     options = PdfPipelineOptions()
