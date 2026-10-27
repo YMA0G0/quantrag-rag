@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Mapping
+from typing import Any
 
 from .formula import fast_tokenize
 
@@ -78,3 +80,47 @@ class TfidfEmbedder:
     @property
     def dimension(self) -> int:
         return len(self._vocab)
+
+    # -- persistence -----------------------------------------------------
+    def state(self) -> dict[str, Any]:
+        """Serialise the fitted model so a query embedder can be rebuilt exactly.
+
+        The vocabulary insertion order is preserved, so the saved IDF list
+        still lines up with the vector dimensions stored in the index.
+        """
+        if not self._fitted:
+            raise RuntimeError("TfidfEmbedder.fit() must be called before state().")
+        return {
+            "format": 1,
+            "min_df": self.min_df,
+            "sublinear_tf": self.sublinear_tf,
+            "vocab": dict(self._vocab),
+            "idf": list(self._idf),
+            "corpus_size": self.corpus_size,
+            "document_frequencies": dict(self.document_frequencies),
+            "model_name": self.model_name,
+        }
+
+    @classmethod
+    def from_state(cls, state: Mapping[str, Any]) -> TfidfEmbedder:
+        """Rebuild a fitted model from :meth:`state` (needs no corpus)."""
+        try:
+            vocab = {str(token): int(index) for token, index in dict(state["vocab"]).items()}
+            idf = [float(value) for value in state["idf"]]
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid TfidfEmbedder state: {exc!r}") from exc
+        if not vocab or len(idf) != len(vocab):
+            raise ValueError("Invalid TfidfEmbedder state: vocabulary and idf disagree.")
+        embedder = cls(
+            min_df=int(state.get("min_df", 1)),
+            sublinear_tf=bool(state.get("sublinear_tf", True)),
+        )
+        embedder._vocab = vocab
+        embedder._idf = idf
+        embedder._fitted = True
+        embedder.corpus_size = int(state.get("corpus_size", 0))
+        embedder.document_frequencies = {
+            str(token): int(count)
+            for token, count in dict(state.get("document_frequencies", {})).items()
+        }
+        return embedder

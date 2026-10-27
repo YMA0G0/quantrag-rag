@@ -132,3 +132,131 @@ def _parse_max_tokens(raw: str | None) -> int:
     if value <= 0:
         raise ConfigurationError(f"{ENV_MAX_TOKENS} must be greater than 0, got {value}.")
     return value
+
+
+# ---------------------------------------------------------------------------
+# Retrieval / RAG configuration
+# ---------------------------------------------------------------------------
+ENV_RAG_INDEX_DIR = "QUANTRAG_INDEX_DIR"
+ENV_RAG_CORPUS = "QUANTRAG_CORPUS_PATH"
+ENV_RAG_MODE = "QUANTRAG_RETRIEVAL_MODE"
+ENV_RAG_ALPHA = "QUANTRAG_HYBRID_ALPHA"
+ENV_RAG_TOP_K = "QUANTRAG_TOP_K"
+ENV_RAG_MIN_SCORE = "QUANTRAG_MIN_SCORE"
+ENV_RAG_MAX_CONTEXT_CHARS = "QUANTRAG_MAX_CONTEXT_CHARS"
+ENV_RAG_EMBEDDER = "QUANTRAG_EMBEDDER"
+
+DEFAULT_RAG_INDEX_DIR = "data/index"
+DEFAULT_RAG_CORPUS_PATH = "data/chunks.jsonl"
+DEFAULT_RETRIEVAL_MODE = "hybrid"
+DEFAULT_HYBRID_ALPHA = 0.5
+DEFAULT_RAG_TOP_K = 5
+DEFAULT_MAX_CONTEXT_CHARS = 6000
+DEFAULT_RAG_EMBEDDER = "openrouter"
+RETRIEVAL_MODES = ("bm25", "vector", "hybrid")
+EMBEDDER_KINDS = ("openrouter", "local")
+
+
+@dataclass(frozen=True, slots=True)
+class RagSettings:
+    """Retrieval and RAG-answering configuration.
+
+    ``min_score`` is deliberately ``None`` by default: the threshold has to be
+    calibrated against the evaluation set (see README) and must never be
+    invented.  ``mode`` and ``alpha`` are placeholders until the evaluation
+    picks the winner.
+    """
+
+    index_dir: Path = Path(DEFAULT_RAG_INDEX_DIR)
+    corpus_path: Path = Path(DEFAULT_RAG_CORPUS_PATH)
+    mode: str = DEFAULT_RETRIEVAL_MODE
+    alpha: float = DEFAULT_HYBRID_ALPHA
+    top_k: int = DEFAULT_RAG_TOP_K
+    max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS
+    embedder: str = DEFAULT_RAG_EMBEDDER
+    min_score: float | None = None
+
+
+def load_rag_settings(
+    env: Mapping[str, str] | None = None,
+    *,
+    root: str | Path | None = None,
+    load_env_file: bool = True,
+) -> RagSettings:
+    """Build :class:`RagSettings` from the environment.
+
+    Relative paths are resolved against ``root`` (default: the working
+    directory) so the same values work from any launch directory.
+    """
+    if load_env_file:
+        load_dotenv()
+
+    source: Mapping[str, str] = os.environ if env is None else env
+    base = Path.cwd() if root is None else Path(root)
+
+    mode = (source.get(ENV_RAG_MODE) or "").strip().lower() or DEFAULT_RETRIEVAL_MODE
+    if mode not in RETRIEVAL_MODES:
+        raise ConfigurationError(
+            f"{ENV_RAG_MODE} must be one of {', '.join(RETRIEVAL_MODES)}, got {mode!r}."
+        )
+
+    embedder = (source.get(ENV_RAG_EMBEDDER) or "").strip().lower() or DEFAULT_RAG_EMBEDDER
+    if embedder not in EMBEDDER_KINDS:
+        raise ConfigurationError(
+            f"{ENV_RAG_EMBEDDER} must be one of {', '.join(EMBEDDER_KINDS)}, got {embedder!r}."
+        )
+
+    return RagSettings(
+        index_dir=_resolve_path(source.get(ENV_RAG_INDEX_DIR), base, DEFAULT_RAG_INDEX_DIR),
+        corpus_path=_resolve_path(source.get(ENV_RAG_CORPUS), base, DEFAULT_RAG_CORPUS_PATH),
+        mode=mode,
+        alpha=_parse_alpha(source.get(ENV_RAG_ALPHA)),
+        top_k=_parse_positive_int(source.get(ENV_RAG_TOP_K), ENV_RAG_TOP_K, DEFAULT_RAG_TOP_K),
+        max_context_chars=_parse_positive_int(
+            source.get(ENV_RAG_MAX_CONTEXT_CHARS),
+            ENV_RAG_MAX_CONTEXT_CHARS,
+            DEFAULT_MAX_CONTEXT_CHARS,
+        ),
+        embedder=embedder,
+        min_score=_parse_optional_float(source.get(ENV_RAG_MIN_SCORE), ENV_RAG_MIN_SCORE),
+    )
+
+
+def _resolve_path(raw: str | None, base: Path, default: str) -> Path:
+    text = (raw or "").strip() or default
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else (base / path)
+
+
+def _parse_alpha(raw: str | None) -> float:
+    if raw is None or not raw.strip():
+        return DEFAULT_HYBRID_ALPHA
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{ENV_RAG_ALPHA} must be a number, got {raw!r}.") from exc
+    if not 0.0 <= value <= 1.0:
+        raise ConfigurationError(f"{ENV_RAG_ALPHA} must be between 0 and 1, got {value}.")
+    return value
+
+
+def _parse_positive_int(raw: str | None, name: str, default: int) -> int:
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be an integer, got {raw!r}.") from exc
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be greater than 0, got {value}.")
+    return value
+
+
+def _parse_optional_float(raw: str | None, name: str) -> float | None:
+    """Parse an optional threshold; blank/unset stays ``None`` (no filtering)."""
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigurationError(f"{name} must be a number, got {raw!r}.") from exc
