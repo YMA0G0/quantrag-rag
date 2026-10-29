@@ -23,7 +23,30 @@ ENV_MAX_TOKENS = "OPENROUTER_MAX_TOKENS"
 ENV_APP_NAME = "OPENROUTER_APP_NAME"
 ENV_APP_URL = "OPENROUTER_APP_URL"
 
+# Kilo (Kilo AI Gateway) configuration
+ENV_KILO_API_KEY = "KILO_API_KEY"
+ENV_KILO_MODEL = "KILO_MODEL"
+ENV_KILO_BASE_URL = "KILO_BASE_URL"
+
+# QuantRAG REST API authentication configuration.
+#
+# QUANTRAG_API_KEYS is a server-side secret: a comma-separated list of
+# high-entropy tokens issued by the service operator, one per authorized MCP
+# user.  Each MCP user configures their own key locally as
+# QUANTRAG_API_KEY and the MCP server forwards it in the X-API-Key header.
+# The REST API validates the header against QUANTRAG_API_KEYS using
+# secrets.compare_digest.
+ENV_QUANTRAG_API_KEYS = "QUANTRAG_API_KEYS"
+ENV_QUANTRAG_API_KEY = "QUANTRAG_API_KEY"
+ENV_QUANTRAG_API_URL = "QUANTRAG_API_URL"
+
+# Fail-safe switch for public deployments.  When truthy, the server refuses to
+# start unless at least one API key is configured, so a misconfigured
+# deployment can never expose /ask, /search or /mcp without authentication.
+ENV_QUANTRAG_REQUIRE_AUTH = "QUANTRAG_REQUIRE_AUTH"
+
 DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_KILO_BASE_URL = "https://ai-gateway.kilo.ai/api/v1"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_TOKENS = 1024
 DEFAULT_APP_NAME = "QuantRAG"
@@ -109,6 +132,87 @@ def load_settings(
     )
 
 
+def load_kilo_settings(
+    env: Mapping[str, str] | None = None,
+    *,
+    dotenv_path: str | Path | None = None,
+    load_env_file: bool = True,
+) -> Settings:
+    """Build :class:`Settings` for Kilo AI Gateway from the environment.
+
+    Args:
+        env: Mapping to read from. Defaults to ``os.environ``.
+        dotenv_path: Explicit path to a ``.env`` file.
+        load_env_file: Set to ``False`` to skip reading ``.env`` entirely.
+
+    Raises:
+        ConfigurationError: If required variables are missing or invalid.
+    """
+    if load_env_file:
+        load_dotenv(dotenv_path)
+
+    source: Mapping[str, str] = os.environ if env is None else env
+
+    api_key = (source.get(ENV_KILO_API_KEY) or "").strip()
+    if not api_key:
+        raise ConfigurationError(
+            f"{ENV_KILO_API_KEY} is not set. Export it or add it to a .env file."
+        )
+
+    model = (source.get(ENV_KILO_MODEL) or "").strip()
+    if not model:
+        raise ConfigurationError(f"{ENV_KILO_MODEL} is not set. Set it to a Kilo model id.")
+
+    base_url = (source.get(ENV_KILO_BASE_URL) or "").strip().rstrip("/") or DEFAULT_KILO_BASE_URL
+    if not base_url.startswith(("http://", "https://")):
+        raise ConfigurationError(f"{ENV_KILO_BASE_URL} must be an http(s) URL, got {base_url!r}.")
+
+    timeout = _parse_timeout(source.get(ENV_TIMEOUT))
+    max_tokens = _parse_max_tokens(source.get(ENV_MAX_TOKENS))
+    app_name = (source.get(ENV_APP_NAME) or "").strip() or DEFAULT_APP_NAME
+    app_url = (source.get(ENV_APP_URL) or "").strip() or None
+
+    return Settings(
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
+        timeout_seconds=timeout,
+        max_tokens=max_tokens,
+        app_name=app_name,
+        app_url=app_url,
+    )
+
+
+def load_provider_settings(
+    provider: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    dotenv_path: str | Path | None = None,
+    load_env_file: bool = True,
+) -> Settings:
+    """Build :class:`Settings` for the specified provider from the environment.
+
+    Args:
+        provider: Provider identifier ("openrouter", "kilo", etc.)
+        env: Mapping to read from. Defaults to ``os.environ``.
+        dotenv_path: Explicit path to a ``.env`` file.
+        load_env_file: Set to ``False`` to skip reading ``.env`` entirely.
+
+    Raises:
+        ConfigurationError: If required variables are missing or invalid.
+        ValueError: If provider is unknown.
+    """
+    if load_env_file:
+        load_dotenv(dotenv_path)
+
+    provider = provider.lower()
+    if provider == "openrouter":
+        return load_settings(env, dotenv_path=dotenv_path, load_env_file=load_env_file)
+    if provider == "kilo":
+        return load_kilo_settings(env, dotenv_path=dotenv_path, load_env_file=load_env_file)
+    raise ValueError(f"Unknown LLM provider: {provider}. Supported: openrouter, kilo")
+
+
 def _parse_timeout(raw: str | None) -> float:
     if raw is None or not raw.strip():
         return DEFAULT_TIMEOUT_SECONDS
@@ -175,6 +279,8 @@ class RagSettings:
     max_context_chars: int = DEFAULT_MAX_CONTEXT_CHARS
     embedder: str = DEFAULT_RAG_EMBEDDER
     min_score: float | None = None
+    api_keys: frozenset[str] = frozenset()
+    require_auth: bool = False
 
 
 def load_rag_settings(
@@ -206,6 +312,10 @@ def load_rag_settings(
             f"{ENV_RAG_EMBEDDER} must be one of {', '.join(EMBEDDER_KINDS)}, got {embedder!r}."
         )
 
+    # Parse the key list
+    key_list = source.get(ENV_QUANTRAG_API_KEYS) or ""
+    api_keys = _parse_key_list(key_list)
+
     return RagSettings(
         index_dir=_resolve_path(source.get(ENV_RAG_INDEX_DIR), base, DEFAULT_RAG_INDEX_DIR),
         corpus_path=_resolve_path(source.get(ENV_RAG_CORPUS), base, DEFAULT_RAG_CORPUS_PATH),
@@ -219,6 +329,29 @@ def load_rag_settings(
         ),
         embedder=embedder,
         min_score=_parse_optional_float(source.get(ENV_RAG_MIN_SCORE), ENV_RAG_MIN_SCORE),
+        api_keys=api_keys,
+        require_auth=_parse_bool(source.get(ENV_QUANTRAG_REQUIRE_AUTH), ENV_QUANTRAG_REQUIRE_AUTH),
+    )
+
+
+def load_auth_settings(
+    env: Mapping[str, str] | None = None,
+    *,
+    load_env_file: bool = True,
+) -> tuple[frozenset[str], bool]:
+    """Load only the authentication configuration.
+
+    Deliberately independent of :func:`load_rag_settings`: a broken retrieval
+    setting must not be able to disable authentication, because the API layer
+    treats "no keys" as local development mode.
+    """
+    if load_env_file:
+        load_dotenv()
+
+    source: Mapping[str, str] = os.environ if env is None else env
+    return (
+        _parse_key_list(source.get(ENV_QUANTRAG_API_KEYS)),
+        _parse_bool(source.get(ENV_QUANTRAG_REQUIRE_AUTH), ENV_QUANTRAG_REQUIRE_AUTH),
     )
 
 
@@ -260,3 +393,28 @@ def _parse_optional_float(raw: str | None, name: str) -> float | None:
         return float(raw)
     except ValueError as exc:
         raise ConfigurationError(f"{name} must be a number, got {raw!r}.") from exc
+
+
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"", "0", "false", "no", "off"})
+
+
+def _parse_bool(raw: str | None, name: str) -> bool:
+    """Parse a permissive boolean flag, rejecting ambiguous values."""
+    value = (raw or "").strip().lower()
+    if value in _TRUE_VALUES:
+        return True
+    if value in _FALSE_VALUES:
+        return False
+    raise ConfigurationError(f"{name} must be a boolean, got {raw!r}.")
+
+
+def _parse_key_list(raw: str | None) -> frozenset[str]:
+    """Parse a comma-separated list of API keys, trimming whitespace.
+
+    Returns an empty set if the input is None or blank.
+    """
+    if not raw:
+        return frozenset()
+    parts = [part.strip() for part in raw.split(",")]
+    return frozenset(part for part in parts if part)

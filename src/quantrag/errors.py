@@ -23,6 +23,14 @@ class RetrievalError(QuantRagError):
     """The retriever received invalid input or an unusable index."""
 
 
+class ZeroVectorError(RetrievalError):
+    """Raised when a query vector has zero magnitude (no vocabulary overlap).
+
+    This is a *recoverable* error: hybrid retrieval can fall back to BM25,
+    and vector-only callers may choose to return an empty result set.
+    """
+
+
 class UpstreamError(QuantRagError):
     """Base class for failures while talking to an upstream LLM provider."""
 

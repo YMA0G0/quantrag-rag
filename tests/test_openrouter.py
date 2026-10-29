@@ -149,6 +149,32 @@ async def test_authentication_error_on_403(settings: Settings) -> None:
     assert excinfo.value.status_code == 403
 
 
+async def test_authentication_error_401_includes_provider_detail(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(
+            error_payload("Invalid API key: insufficient credits"), status_code=401
+        )
+
+    client = build_client(handler, settings)
+    with pytest.raises(AuthenticationError) as excinfo:
+        await client.complete("hi")
+    assert excinfo.value.status_code == 401
+    assert "insufficient credits" in str(excinfo.value)
+    assert TEST_API_KEY not in str(excinfo.value)
+
+
+async def test_authentication_error_403_includes_provider_detail(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(error_payload("Forbidden: model not available"), status_code=403)
+
+    client = build_client(handler, settings)
+    with pytest.raises(AuthenticationError) as excinfo:
+        await client.complete("hi")
+    assert excinfo.value.status_code == 403
+    assert "model not available" in str(excinfo.value)
+    assert TEST_API_KEY not in str(excinfo.value)
+
+
 async def test_rate_limit_error_on_429(settings: Settings) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

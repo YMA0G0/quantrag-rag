@@ -32,9 +32,10 @@ from typing import Any
 from .bm25 import BM25Index
 from .config import RagSettings, load_rag_settings, load_settings
 from .embeddings import Embedder, OpenRouterEmbedder, load_embedding_model
-from .errors import ConfigurationError, MalformedResponseError, RetrievalError
+from .errors import ConfigurationError, MalformedResponseError, RetrievalError, ZeroVectorError
 from .local_embeddings import TfidfEmbedder
-from .openrouter import ChatCompleter, OpenRouterClient
+from .openrouter import ChatCompleter
+from .providers import create_provider_from_env
 from .rag import (
     NOT_FOUND,
     RAG_SYSTEM_PROMPT,
@@ -121,7 +122,7 @@ class RagService:
     def __init__(
         self,
         *,
-        chat: ChatCompleter,
+        chat: ChatCompleter | None = None,
         settings: RagSettings,
         chunks: list[Chunk],
         vector_store: InMemoryVectorStore | None = None,
@@ -144,7 +145,7 @@ class RagService:
         cls,
         chunks: list[Chunk],
         *,
-        chat: ChatCompleter,
+        chat: ChatCompleter | None = None,
         settings: RagSettings,
         embedder: Embedder | None = None,
         corpus_label: str = "<in-memory>",
@@ -182,7 +183,7 @@ class RagService:
         cls,
         index_dir: str | Path,
         *,
-        chat: ChatCompleter,
+        chat: ChatCompleter | None = None,
         settings: RagSettings,
         embedder: Embedder | None = None,
     ) -> RagService:
@@ -303,10 +304,16 @@ class RagService:
             )
         assert self._store is not None  # narrowed by has_vectors
         assert self._embedder is not None
-        [vector] = await self._embedder.embed([text])
+        try:
+            [vector] = await self._embedder.embed([text])
+            results = self._store.search(vector, k)
+        except ZeroVectorError:
+            # Query has no vocabulary overlap; return empty list so hybrid
+            # can fall back to BM25 and vector callers get an empty result.
+            return []
         return [
             RetrievalHit(chunk=result.chunk, score=result.score, source="vector")
-            for result in self._store.search(vector, k)
+            for result in results
         ]
 
     def _bm25_search(self, text: str, k: int) -> list[RetrievalHit]:
@@ -360,6 +367,11 @@ class RagService:
         mode: str | None = None,
     ) -> AskResult:
         """Retrieve, then answer strictly from the retrieved chunks."""
+        if self._chat is None:
+            raise ConfigurationError(
+                "RagService was constructed without a chat provider. "
+                "Provide a ChatCompleter to use ask()."
+            )
         text = question.strip() if isinstance(question, str) else ""
         if not text:
             raise RetrievalError("The question must be a non-empty string.")
@@ -508,14 +520,33 @@ async def build_service(
     settings: RagSettings | None = None,
     env: Mapping[str, str] | None = None,
     embedder: Embedder | None = None,
+    llm_provider: str | None = None,
 ) -> RagService:
-    """Build the one service instance used by the MCP server and the HTTP app."""
+    """Build the one service instance used by the MCP server and the HTTP app.
+
+    If ``chat`` is not provided, attempts to build an LLM provider from
+    ``env`` (or the process environment) using the provider specified by
+    ``llm_provider`` (or QUANTRAG_LLM_PROVIDER env var, default: openrouter).
+    If the API key is not configured, the service is created without a chat
+    provider -- retrieval works, but ``ask()`` will raise a clear configuration
+    error.
+    """
     rag_settings = settings or load_rag_settings(env, load_env_file=False)
+
+    # Build chat provider if not explicitly provided and credentials are available
+    if chat is None:
+        try:
+            # Use provider factory to create the appropriate LLM provider
+            provider_env = env if env is not None else os.environ
+            chat = create_provider_from_env(provider_env)
+        except ConfigurationError:
+            # No API key configured; retrieval-only mode
+            chat = None
 
     if (rag_settings.index_dir / MANIFEST_NAME).is_file():
         return RagService.from_index(
             rag_settings.index_dir,
-            chat=chat or _build_chat(env),
+            chat=chat,
             settings=rag_settings,
             embedder=embedder or load_index_embedder(rag_settings.index_dir, env=env),
         )
@@ -525,7 +556,7 @@ async def build_service(
         chunks = load_chunks_jsonl(corpus)
         return await RagService.from_chunks(
             chunks,
-            chat=chat or _build_chat(env),
+            chat=chat,
             settings=rag_settings,
             embedder=embedder or build_embedder(rag_settings.embedder, chunks=chunks, env=env),
             corpus_label=str(corpus),
@@ -537,10 +568,6 @@ async def build_service(
         "does not exist. Build the index with: uv run python -m quantrag.index_build "
         "--chunks <chunks.jsonl> --out <index-dir> --embedder local"
     )
-
-
-def _build_chat(env: Mapping[str, str] | None) -> ChatCompleter:
-    return OpenRouterClient(load_settings(env, load_env_file=False))
 
 
 def _coerce_k(k: int) -> int:

@@ -27,8 +27,13 @@ dist/
 # --- Ingestion artefacts ---
 data/raw/
 data/chunks.jsonl
-data/index
-data/index.json
+# Keep the prebuilt runtime index for Docker deployment,
+# but do not include unexpected files inside it.
+data/index/*
+!data/index/manifest.json
+!data/index/chunks.jsonl
+!data/index/vectors.json
+!data/index/embedder.json
 data/ingest_report.json
 data/ingest_report.csv
 data/ingest_report.dryrun.json
@@ -37,3 +42,9 @@ data/ingest_report.dryrun.csv
 # Manual source documents (large, licence-unclear)
 data/manual/*
 !data/manual/README.md
+
+# --- Local staging and rollback artefacts ---
+data/staging/
+data/.quantrag_index_rollback_*
+data/.quantrag_index_stage_*
+data/.quantrag_candidate_prepared_*

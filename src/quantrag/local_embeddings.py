@@ -15,6 +15,7 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from .errors import ZeroVectorError
 from .formula import fast_tokenize
 
 
@@ -63,7 +64,9 @@ class TfidfEmbedder:
             vector[index] = weight * self._idf[index]
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0.0:
-            return vector
+            raise ZeroVectorError(
+                "Query has no vocabulary overlap with the corpus."
+            )
         return [value / norm for value in vector]
 
     async def embed(self, texts: list[str]) -> list[list[float]]:

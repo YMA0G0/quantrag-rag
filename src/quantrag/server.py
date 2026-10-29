@@ -11,13 +11,19 @@ starts an HTTP server on ``QUANTRAG_HTTP_HOST`` / ``QUANTRAG_HTTP_PORT``.
 from __future__ import annotations
 
 import logging
+import os
 import sys
+from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 
 from .config import load_rag_settings
-from .errors import ConfigurationError, RetrievalError
+from .errors import (
+    ConfigurationError,
+    RetrievalError,
+)
 from .service import RagService, build_service
 
 logger = logging.getLogger("quantrag")
@@ -50,8 +56,20 @@ async def _get_service() -> RagService:
 _SERVICE: RagService | None = None
 
 
-def create_server(*, service: RagService | None = None) -> FastMCP:
-    """Build the FastMCP server, optionally with an injected service (tests)."""
+def create_server(
+    *,
+    service: RagService | None = None,
+    streamable_http_path: str = "/mcp",
+    transport_security=None,
+) -> FastMCP:
+    """Build the FastMCP server, optionally with an injected service (tests).
+
+    When mounted under FastAPI at ``/mcp``, set ``streamable_http_path="/"`
+    so that the MCP route matches after the mount prefix is stripped.
+
+    Set ``transport_security=None`` to disable DNS rebinding protection when
+    the MCP endpoint is behind our own X-API-Key authentication middleware.
+    """
     global _SERVICE
     if service is not None:
         _SERVICE = service
@@ -65,6 +83,8 @@ def create_server(*, service: RagService | None = None) -> FastMCP:
             "Quantitative-finance retrieval-augmented answering. "
             f"Use {ASK_TOOL} for grounded answers and {SEARCH_TOOL} for raw search."
         ),
+        streamable_http_path=streamable_http_path,
+        transport_security=transport_security,
     )
 
     @server.tool(name=ASK_TOOL, description=ASK_DESCRIPTION)
@@ -141,6 +161,118 @@ def configure_logging(level: int = logging.INFO) -> None:
         root.addHandler(handler)
     root.setLevel(level)
 
+
+
+# ------------------------------------------------------------------
+# Optional HTTP backend transport (for deployment with REST API)
+# ------------------------------------------------------------------
+
+API_KEY_ENV = "QUANTRAG_API_KEY"
+API_URL_ENV = "QUANTRAG_API_URL"
+
+
+class HttpRagClient:
+    """Forward MCP tool calls to the REST API with X-API-Key header.
+
+    Used when ``QUANTRAG_API_URL`` is configured.  If ``QUANTRAG_API_KEY``
+    is set, it is forwarded in the ``X-API-Key`` header.  Missing
+    ``QUANTRAG_API_URL`` falls back to the local in-process service.
+    """
+
+    def __init__(self, base_url: str | None = None):
+        self.base_url = (base_url or os.environ.get(API_URL_ENV) or "").strip()
+        self.api_key = os.environ.get(API_KEY_ENV) or ""
+        self.client = httpx.AsyncClient(timeout=60.0) if self.base_url else None
+
+    async def ask(self, text: str, *, k: int | None = None, mode: str | None = None) -> Any:
+        if not self.base_url or not self.client:
+            raise ConfigurationError(
+                "QUANTRAG_API_URL is not configured; cannot use HTTP backend."
+            )
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        try:
+            resp = await self.client.post(
+                f"{self.base_url.rstrip('/')}/ask",
+                headers=headers,
+                json={
+                    "question": text,
+                    "k": k,
+                    "mode": mode,
+                },
+            )
+            if resp.status_code == 401:
+                raise ToolError("QuantRAG authentication failed: invalid or missing API key.")
+            if resp.status_code == 504:
+                raise ToolError("QuantRAG upstream timeout: REST API did not respond.")
+            if resp.status_code == 429:
+                raise ToolError("QuantRAG rate limit exceeded: try again later.")
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.TimeoutException as exc:
+            logger.error("QuantRAG REST timeout: %s", exc)
+            raise ToolError("QuantRAG upstream timeout.") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("QuantRAG REST error: %s (status %d)", exc, exc.response.status_code)
+            raise ToolError(f"Upstream error ({exc.response.status_code})") from exc
+
+    async def search(
+        self,
+        text: str,
+        *,
+        k: int | None = None,
+        mode: str | None = None,
+        min_score: float | None = None,
+    ) -> Any:
+        if not self.base_url or not self.client:
+            raise ConfigurationError(
+                "QUANTRAG_API_URL is not configured; cannot use HTTP backend."
+            )
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        try:
+            resp = await self.client.post(
+                f"{self.base_url.rstrip('/')}/search",
+                headers=headers,
+                json={
+                    "query": text,
+                    "k": k,
+                    "mode": mode,
+                    "min_score": min_score,
+                },
+            )
+            if resp.status_code == 401:
+                raise ToolError("QuantRAG authentication failed: invalid or missing API key.")
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.TimeoutException as exc:
+            logger.error("QuantRAG REST timeout: %s", exc)
+            raise ToolError("QuantRAG upstream timeout.") from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error("QuantRAG REST error: %s (status %d)", exc, exc.response.status_code)
+            raise ToolError(f"Upstream error ({exc.response.status_code})") from exc
+
+    async def aclose(self) -> None:
+        if self.client:
+            await self.client.aclose()
+
+
+# ------------------------------------------------------------------
+# Tool-level error mapping for upstream REST failures
+# ------------------------------------------------------------------
+
+def _map_rest_error_to_tool_text(status_code: int) -> str:
+    if status_code == 401:
+        return "QuantRAG authentication failed (check your configured API key)."
+    if status_code == 429:
+        return "QuantRAG rate limit exceeded."
+    if status_code == 504:
+        return "QuantRAG upstream timeout."
+    if status_code >= 500:
+        return "QuantRAG upstream server error."
+    return f"QuantRAG upstream error (status {status_code})."
 
 def main(argv: list[str] | None = None) -> int:
     """Entry point: run the MCP server over stdio or streamable-http."""

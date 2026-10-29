@@ -1,0 +1,53 @@
+# --- Secrets / local configuration ---
+.env
+.env.*
+!.env.example
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Build / download artefacts ---
+*.zip
+new*.zip
+quantrag_*.zip
+pdfs/
+
+# --- Python caches / build artefacts ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# --- Source / development artifacts ---
+.git/
+.pi/
+.gitignore
+.venv/
+
+# --- Tests ---
+tests/
+
+# --- Ingestion artifacts (NOT index) ---
+data/raw/
+data/chunks.jsonl
+data/manual/*
+!data/manual/README.md
+data/staging/
+data/ingest_report.json
+data/ingest_report.csv
+data/ingest_report.dryrun.json
+data/ingest_report.dryrun.csv
+data/.quantrag_index_rollback_*
+data/.quantrag_index_stage_*
+data/.quantrag_candidate_prepared_prep_*
+
+# --- EXCLUDE .env but INCLUDE index ---
+data/.env
+
+# --- Note: data/index is RETAINED (prebuilt index for container) ---

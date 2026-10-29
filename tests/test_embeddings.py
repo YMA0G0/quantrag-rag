@@ -96,6 +96,28 @@ async def test_auth_and_rate_limit_errors(
         await build(handler, settings).embed(["a"])
 
 
+async def test_authentication_error_401_includes_provider_detail(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(error_payload("Invalid API key: quota exceeded"), status_code=401)
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        await build(handler, settings).embed(["a"])
+    assert excinfo.value.status_code == 401
+    assert "quota exceeded" in str(excinfo.value)
+    assert TEST_API_KEY not in str(excinfo.value)
+
+
+async def test_authentication_error_403_includes_provider_detail(settings: Settings) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return json_response(error_payload("Forbidden: model access denied"), status_code=403)
+
+    with pytest.raises(AuthenticationError) as excinfo:
+        await build(handler, settings).embed(["a"])
+    assert excinfo.value.status_code == 403
+    assert "model access denied" in str(excinfo.value)
+    assert TEST_API_KEY not in str(excinfo.value)
+
+
 async def test_server_error_never_contains_the_api_key(settings: Settings) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return json_response(error_payload(f"key {TEST_API_KEY} bad"), status_code=500)

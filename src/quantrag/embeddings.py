@@ -115,8 +115,11 @@ class OpenRouterEmbedder:
     def _parse_response(self, response: httpx.Response, *, expected: int) -> list[list[float]]:
         status = response.status_code
         if status in (401, 403):
+            detail = self._error_detail(response)
+            suffix = f": {detail}" if detail else "."
             raise AuthenticationError(
-                f"OpenRouter rejected the API key (HTTP {status}). Check {ENV_API_KEY}.", status
+                f"OpenRouter rejected the API key (HTTP {status}){suffix} Check {ENV_API_KEY}.",
+                status,
             )
         if status == 429:
             raise RateLimitError("OpenRouter rate limit reached (HTTP 429). Retry later.", status)
