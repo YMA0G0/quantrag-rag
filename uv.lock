@@ -2306,16 +2306,14 @@ name = "quantrag"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "mcp" },
     { name = "python-dotenv" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
-api = [
-    { name = "fastapi" },
-    { name = "uvicorn" },
-]
 dev = [
     { name = "pytest" },
     { name = "ruff" },
@@ -2338,7 +2336,7 @@ math-pdf = [
 requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'ingest'", specifier = ">=4.12" },
     { name = "docling", marker = "extra == 'math-pdf'", specifier = ">=2.0" },
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110,<1" },
+    { name = "fastapi", specifier = ">=0.110,<1" },
     { name = "fonttools", marker = "extra == 'ingest'", specifier = ">=4.50" },
     { name = "httpx", specifier = ">=0.27,<1" },
     { name = "lxml", marker = "extra == 'ingest'", specifier = ">=5.0" },
@@ -2351,9 +2349,9 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "tiktoken", marker = "extra == 'ingest'", specifier = ">=0.7" },
     { name = "trafilatura", marker = "extra == 'ingest'", specifier = ">=1.9" },
-    { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30,<1" },
+    { name = "uvicorn", specifier = ">=0.30,<1" },
 ]
-provides-extras = ["dev", "api", "ingest", "math-pdf"]
+provides-extras = ["dev", "ingest", "math-pdf"]
 
 [[package]]
 name = "rapidocr"
