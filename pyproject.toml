@@ -1,3 +1,4 @@
+
 [project]
 name = "quantrag"
 version = "0.1.0"
@@ -8,6 +9,8 @@ dependencies = [
     "mcp>=1.30,<2",
     "httpx>=0.27,<1",
     "python-dotenv>=1.0,<2",
+    "fastapi>=0.110,<1",
+    "uvicorn>=0.30,<1",
 ]
 
 [project.scripts]
@@ -17,10 +20,6 @@ quantrag = "quantrag.server:main"
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
-]
-api = [
-    "fastapi>=0.110,<1",
-    "uvicorn>=0.30,<1",
 ]
 ingest = [
     "pypdf>=4.0",
@@ -32,6 +31,7 @@ ingest = [
     "tiktoken>=0.7",
     "fonttools>=4.50",
 ]
+
 # Heavy PDF extraction with formula enrichment (docling + PyTorch/transformers).
 # Opt-in only; not included in the default ingest extra.
 math-pdf = [
@@ -57,3 +57,6 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.vercel]
+entrypoint = "src.quantrag.api:app"
